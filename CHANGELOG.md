@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `AGENTS.md` now opens with a guide for any AI coding agent: what to read for each task (explain, try, run a
+  board, join a board, change the code) and the rules every agent keeps. The contributor guide follows it.
+- New `CLAUDE.md`, which loads `AGENTS.md` in Claude Code, and a root `llms.txt` that maps the documents.
+- The README has a short "For AI agents" section with a prompt to give an agent.
+- No code changed. `partner-pack/p2p.mjs` is the same file as in 0.3.0.
+
 ## 0.3.0 (2026-11-19)
 
 - A hash-chained record per room (`p2paecn-chain-1`, specified in `partner-pack/CHAIN.md`): every accepted card,
