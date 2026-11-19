@@ -163,11 +163,56 @@ async fn a_held_request_is_woken_by_another_members_post_and_not_by_anything_els
     let (_, got, _) = held.await.unwrap();
     let kinds: Vec<&str> = got["events"].as_array().unwrap().iter().map(|e| e["kind"].as_str().unwrap()).collect();
     assert_eq!(kinds, ["message", "stage"]);
-    let held = waiting(w, &b.reseller, format!("/v1/inbox/wait?after={}&room=hub", got["cursor"].as_str().unwrap()));
+    let _ = got;
+}
+
+#[tokio::test]
+async fn a_membership_change_is_not_delivered_until_something_else_happens_in_the_room() {
+    let b = board(2);
+    let w = &b.w;
+    // The operator adds a member while a request is held on the room: the request is not answered, and at the cap
+    // its cursor has not moved past the membership entry. The moment the member arrived cannot be read from it.
+    let held = waiting(w, &b.reseller, "/v1/inbox/wait?after=hub.2&room=hub".to_owned());
     a_moment().await;
     assert_eq!(w.op("POST", "/rooms/members", json!({ "room": "hub", "org": "reseller-z", "handle": "member-3" })).await.0, StatusCode::CREATED);
-    let (_, got, _) = held.await.unwrap();
-    assert_eq!(got["events"], json!([{ "room": "hub", "seq": 3, "kind": "member-added", "card": null, "actor": "*operator", "time": 0 }]));
+    let (status, got, took) = held.await.unwrap();
+    assert!(took >= Duration::from_millis(1900), "held to the cap: {took:?}");
+    assert_eq!((status, got), (StatusCode::OK, json!({ "events": [], "cursor": "hub.2", "more": false, "timedOut": true, "wait": 2 })));
+    // Asked again at once, and for all rooms: still nothing, and the cursor still stands before it.
+    let (_, look) = w.get(&b.reseller, "/v1/inbox/wait?after=a-x.2_hub.2&wait=0").await;
+    assert_eq!((look["events"].clone(), look["cursor"].clone()), (json!([]), json!("a-x.2_hub.2")));
+    // A removal with nothing to close, and the member added again: three membership entries, none delivered.
+    assert_eq!(w.op("POST", "/rooms/members/remove", json!({ "room": "hub", "org": "reseller-z" })).await.0, StatusCode::OK);
+    assert_eq!(w.op("POST", "/rooms/members", json!({ "room": "hub", "org": "reseller-z", "handle": "member-3" })).await.0, StatusCode::CREATED);
+    let (_, look) = w.get(&b.reseller, "/v1/inbox/wait?after=hub.2&room=hub&wait=0").await;
+    assert_eq!((look["events"].clone(), look["cursor"].clone()), (json!([]), json!("hub.2")));
+
+    // When a member then posts, the held request is answered with the membership entries first and the post
+    // after them. They carry no time, as in the record.
+    let held = waiting(w, &b.reseller, "/v1/inbox/wait?after=hub.2&room=hub".to_owned());
+    a_moment().await;
+    assert_eq!(w.post(&b.outsider, "/v1/rooms/hub/cards", notice("A first notice from the new member")).await.0, StatusCode::CREATED);
+    let (_, got, took) = held.await.unwrap();
+    assert!(took < Duration::from_millis(1800), "{took:?}");
+    let shape: Vec<(u64, &str, &str, u64)> = got["events"].as_array().unwrap().iter()
+        .map(|e| (e["seq"].as_u64().unwrap(), e["kind"].as_str().unwrap(), e["actor"].as_str().unwrap(), e["time"].as_u64().unwrap().min(1)))
+        .collect();
+    assert_eq!(shape, [(3, "member-added", "*operator", 0), (4, "member-removed", "*operator", 0), (5, "member-added", "*operator", 0), (6, "card", "member-3", 1)]);
+    assert_eq!(got["cursor"], json!("hub.6"));
+    // The caller's own post moves the cursor past a membership entry too, without making it an event of its own.
+    assert_eq!(w.op("POST", "/rooms/members/remove", json!({ "room": "hub", "org": "reseller-z" })).await.0, StatusCode::OK);
+    let (_, look) = w.get(&b.reseller, "/v1/inbox/wait?after=hub.6&room=hub&wait=0").await;
+    assert_eq!(look["cursor"], json!("hub.6"), "the removal and the closing of its finding wait for the cursor to pass them");
+    let _ = look;
+    // (The removal closed nothing here: the new member's card was a notice.)
+    assert_eq!(w.post(&b.reseller, "/v1/rooms/hub/cards", notice("Our own notice")).await.0, StatusCode::CREATED);
+    let (_, look) = w.get(&b.reseller, "/v1/inbox/wait?after=hub.6&room=hub&wait=0").await;
+    assert_eq!(look["cursor"], json!("hub.8"));
+    assert_eq!(look["events"], json!([{ "room": "hub", "seq": 7, "kind": "member-removed", "card": null, "actor": "*operator", "time": 0 }]));
+    // A room that is new to the caller: its first members alone are no news either.
+    assert_eq!(w.op("POST", "/rooms", json!({ "id": "x-z", "kind": "pair", "members": [{ "org": "reseller-x" }, { "org": "reseller-z" }] })).await.0, StatusCode::CREATED);
+    let (_, new_room) = w.get(&b.reseller, "/v1/inbox/wait?after=a-x.2_hub.8&wait=0").await;
+    assert_eq!((new_room["events"].clone(), new_room["cursor"].clone()), (json!([]), json!("a-x.2_hub.8_x-z.0")));
 }
 
 #[tokio::test]

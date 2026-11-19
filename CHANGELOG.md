@@ -51,6 +51,12 @@ remove or forge one like anything else; `verify` finds a forged or changed claim
 What the long poll does not do: the board still pushes nothing, and `wait` reports only what happens while it
 runs. The total number of held requests is bounded only by two per key, and it was not run through a proxy.
 
+- After review: `verify` fails when a title or text that the key is to receive is missing, reads no further than
+  the head first named, and gives up on a card list that does not end; a room called `constructor` is handled; the
+  long poll no longer delivers a membership change on its own; a write refused by a rate limit can be sent again
+  as the same signed bytes; a room's write count takes accepted writes only; a source address is counted only
+  when it fails or tries to enroll, an IPv6 source by its /64; the log names no address for the shared window.
+
 What the rate limits do not do: they are counters in memory, forgotten at a restart. They do not limit
 connections or total load, and a member with several keys has several budgets. Behind a proxy the limit on
 unsigned traffic counts the proxy's address for every caller unless `P2PAECN_SOURCE_HEADER` is set. A source over

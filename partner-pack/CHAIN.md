@@ -32,6 +32,9 @@ What a check that passes tells you:
 
 What it does not tell you, stated plainly:
 
+- **It vouches only for the answers the board gave during that run.** `verify` compares what the board served
+  to `verify`. A board could answer the requests of `verify` in one way and those of `show`, of the web view or of
+  another member in another way. Nothing in a later answer is covered by an earlier check.
 - **It detects a change only after you have saved a head.** The first check of a room compares the board with
   itself. An operator who changed the history before your first check, and rebuilt the record to match, passes it.
 - **The operator can still post as a member.** The operator can enroll a key for any organisation and write with
@@ -102,12 +105,18 @@ the board at that moment, and the `stage` entry says that the card is closed.
 A write that is refused appends nothing. A write repeated with the same `Idempotency-Key` returns its first answer
 and appends nothing.
 
-**Membership entries carry no time.** Their `time` is `0`. An exact time would let a member of a shared room match
-the moment a handle arrived with the moment a pair room appeared, and so learn which organisation is behind the
-handle. Their place in the order still shows between which two entries the change was made, and the `stage`
-entries that follow a removal carry the time of the removal. A member who joins a shared room later can also see
-how many membership changes came before, and can test a guessed handle against the payload hash of a
-`member-added` entry.
+**Membership entries carry no time.** Their `time` is `0`. An exact time, written down for good, would let a
+member of a shared room match the moment a handle arrived with the moment a pair room appeared, long after the
+fact, and so learn which organisation is behind the handle. For the same reason the long poll
+(`GET /v1/inbox/wait`) does not deliver a membership entry on its own: it neither answers a held request nor
+appears as an event until a later entry of another kind in that room moves the cursor past it.
+
+What this rule does and does not protect: it protects against a member who was not watching. A member who asks
+for the room list or for the record again and again sees a new member appear between two of its own requests, and
+so learns the time as closely as it polls. Nothing stops that. The place of a membership entry in the order also
+shows between which two entries the change was made, and the `stage` and `release` entries that follow a removal
+carry the time of the removal. A member who joins a shared room later can see how many membership changes came
+before, and can test a guessed handle against the payload hash of a `member-added` entry.
 
 ## 3. The bytes
 
@@ -243,9 +252,13 @@ room's head, as `chain: { seq, hash }`.
 
 This is what `node p2p.mjs verify [room]` does for each room. A client of your own should do the same.
 
-1. **Fetch** the whole record, then every card of the room with its thread (`GET /v1/rooms/{room}/cards` page by
-   page, then `GET /v1/cards/{id}` for each), then the record once more from the last entry you hold. If entries
-   were added in between, the room changed while you read it: start again.
+1. **Fetch** the record up to the head that the first answer names, then every card of the room with its thread
+   (`GET /v1/rooms/{room}/cards` page by page, then `GET /v1/cards/{id}` for each), then ask once for what came
+   after that head. If entries were added in between, the room changed while you read it: start again, a few
+   times at most. Do not follow a board without end: read no entry beyond the head first named (what came later
+   is for the next run), stop when a page brings fewer entries than the record is said to hold, and stop when the
+   card list gives a cursor or a card twice, a page without cards, or more cards than the record has `card`
+   entries. Each of these is a failed check, not a reason to keep asking.
 2. **Links.** For each entry in order: its `seq` is the previous one plus 1, starting at 1. Its `prev` is the hash
    of the entry before, or 64 zeros. Its `hash` is the SHA-256 of the entry record you build yourself from its
    parts and your room id. The head the board names is the last entry.
@@ -274,8 +287,10 @@ This is what `node p2p.mjs verify [room]` does for each room. A client of your o
 11. If everything held, **save the head** together with the time. If anything failed, keep the head you had: it
     is the evidence. Tell a person. Do not act on the board because of it.
 
-Where your key does not receive a title or a text (class `fields`), skip the payload comparison of that entry and
-count it. The same holds for the note of another organisation's claim.
+Where your key does not receive a title or a text, skip the payload comparison of that entry and count it. That
+is allowed in one case only: a key of class `fields`, for a title, text or claim note that another organisation
+wrote. A key of class `text` receives every title and text, and a `fields` key receives its own organisation's.
+If one of those is `null` or missing, the board held something back from the check: the room does not verify.
 
 What the check cannot tell about claims: a claim that the board shows must be in the record, so one that was put
 on a card without its entry, or whose note or time was changed, is found. A claim that is missing from a card is
@@ -286,7 +301,8 @@ The client exits with code 5 when a room does not verify, prints which entry, ca
 the saved head as it was. `--json` gives the same per room: `ok`, `head`, the counts, the `saved` head and a list
 of `problems`.
 
-The cost: one request per 1000 entries, one per 100 cards and one per card, each time. That suits a board with a
+The client reads no record longer than 2,000,000 entries. The cost: one request per 1000 entries, one per 100
+cards and one per card, each time. That suits a board with a
 modest number of cards. It has not been measured on a large one.
 
 ## 8. History from before the record existed

@@ -565,3 +565,257 @@ test('a board that gives a record with a gap, or names a head it does not hold: 
     await new Promise(r => stub.close(r));
   }
 });
+
+// ---------------------------------------------------------------- a board that does not play fair
+
+/**
+ * A fake board for `verify`: one room, served from `state`, which a test changes between runs. It checks no
+ * signature. By default it is an honest board holding room a-x of the test vectors: its record, and the two cards
+ * and seven messages that the record was made from, as supplier-a sees them.
+ */
+async function fakeBoard(name, { profileClass = 'text' } = {}) {
+  const vectors = JSON.parse(readFileSync(join(ROOT, 'partner-pack', 'vectors', 'chain-1.json'), 'utf8')).rooms[0];
+  const you = 'supplier-a';
+  const mark = actor => ({ mine: actor === you, untrusted: actor !== you });
+  const details = new Map();
+  for (const { values, entry } of vectors.entries) {
+    if (entry.kind === 'card') {
+      details.set(entry.card, {
+        card: { id: entry.card, room: 'a-x', kind: values.kind, severity: values.severity, title: values.title, reporter: entry.actor, ...mark(entry.actor),
+          stage: values.kind === 'finding' ? 'reported' : 'posted', outcome: null, created: entry.time, updated: entry.time, messages: 1, claim: null },
+        messages: [{ id: values.message, card: entry.card, author: entry.actor, ...mark(entry.actor), kind: 'report', text: values.text, replaces: null, created: entry.time }],
+      });
+    } else if (entry.kind === 'message') {
+      details.get(entry.card).messages.push({ id: values.id, card: entry.card, author: entry.actor, ...mark(entry.actor), kind: values.kind, text: values.text, replaces: values.replaces, created: entry.time });
+    } else if (entry.kind === 'stage') {
+      Object.assign(details.get(entry.card).card, { stage: values.stage, outcome: values.outcome });
+    }
+  }
+  const state = {
+    room: 'a-x',
+    you,
+    others: ['reseller-x'],
+    entries: vectors.entries.map(v => v.entry),
+    details,
+    asked: [],
+    // What a test may replace: each gets the parsed URL and the honest answer, and returns the answer to give.
+    chain: (url, honest) => honest,
+    cards: (url, honest) => honest,
+    card: (id, honest) => honest,
+  };
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, 'http://fake');
+    state.asked.push(url.pathname + url.search);
+    const send = body => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(body));
+    const last = state.entries[state.entries.length - 1];
+    if (url.pathname === '/v1/rooms') return send({ rooms: [{ id: state.room, kind: 'pair', you: state.you, others: state.others }] });
+    if (url.pathname === `/v1/rooms/${state.room}/chain`) {
+      const after = Number(url.searchParams.get('after'));
+      const page = state.entries.slice(after, after + Number(url.searchParams.get('limit') || 200));
+      return send(state.chain(url, { room: state.room, format: 'p2paecn-chain-1', entries: page, head: { seq: last.seq, hash: last.hash } }));
+    }
+    if (url.pathname === `/v1/rooms/${state.room}/cards`) return send(state.cards(url, { cards: [...state.details.values()].map(d => d.card).reverse() }));
+    const id = url.pathname.match(/^\/v1\/cards\/([0-9a-f-]{36})$/)?.[1];
+    if (id && state.details.has(id)) return send(state.card(id, structuredClone(state.details.get(id))));
+    res.writeHead(404, { 'content-type': 'application/json' }).end('{"error":"not_found"}');
+  });
+  await new Promise(done => server.listen(0, '127.0.0.1', done));
+  // A profile for the fake board: a TEST key made from a fixed seed. The fake does not look at signatures.
+  const privateKey = createPrivateKey({ key: Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), Buffer.alloc(32, 51)]), format: 'der', type: 'pkcs8' });
+  mkdirSync(home(name), { mode: 0o700 });
+  const profile = { privateKey: privateKey.export({ type: 'pkcs8', format: 'pem' }), publicKey: createPublicKey(privateKey).export({ format: 'jwk' }).x,
+    url: `http://127.0.0.1:${server.address().port}`, name: 'agent', keyId: 'supplier-a/agent', org: 'supplier-a', class: profileClass };
+  writeFileSync(join(home(name), 'profile.json'), JSON.stringify(profile), { mode: 0o600 });
+  const chainRequests = () => state.asked.filter(path => path.includes('/chain')).length;
+  return { state, chainRequests, run: args => client(name, args), close: () => new Promise(r => server.close(r)) };
+}
+
+test('a title or text the board holds back from a text key: the room does not verify', async () => {
+  const fake = await fakeBoard('held-back');
+  const fields = await fakeBoard('held-back-fields', { profileClass: 'fields' });
+  try {
+    const { state } = fake;
+    const [first] = [...state.details.keys()];
+    // The honest fake verifies: the test below is not passing for another reason.
+    const honest = await fake.run(['verify']);
+    assert.equal(honest.code, 0, honest.all);
+    assert.match(honest.stdout, /compared {2}2 cards, 7 messages and 2 members with 12 entries/);
+    assert.ok(!honest.stdout.includes('withheld'));
+
+    // Each way of leaving a text out. A key of class text is to receive every one of them.
+    const leaveOut = [
+      ['a reply by the other side', d => (d.messages[4].text = null), /differs {3}message 7d3a9f40-0000-4000-8000-000000000005 on card \S+: the board gave no text, which this key is to receive/],
+      ['our own reply', d => (d.messages[1].text = null), /differs {3}message 7d3a9f40-0000-4000-8000-000000000002 on card \S+: the board gave no text/],
+      ['a text that is not there at all', d => delete d.messages[2].text, /differs {3}message 7d3a9f40-0000-4000-8000-000000000003 on card \S+: the board gave no text/],
+      ['the title', d => (d.card.title = null), /differs {3}card \S+: the board gave no title or no report text, which this key is to receive/],
+      ['the text of the report', d => (d.messages[0].text = null), /differs {3}card \S+: the board gave no title or no report text/],
+    ];
+    for (const [what, change, expected] of leaveOut) {
+      state.card = (id, honest) => {
+        if (id === first) change(honest);
+        return honest;
+      };
+      const r = await fake.run(['verify']);
+      assert.equal(r.code, 5, `${what}: ${r.all}`);
+      assert.match(r.stdout, /^room a-x: DOES NOT VERIFY$/m, what);
+      assert.match(r.stdout, expected, what);
+      assert.ok(!r.stdout.includes('withheld'), `${what}: a text key has nothing withheld`);
+      assert.match(r.stderr, CHANGED, what);
+    }
+    assert.equal(heads('held-back').rooms['a-x'].seq, 12, 'the head saved by the honest run is kept');
+
+    // A key of class fields: the other side's texts may be missing and are counted, its own may not.
+    const f = fields.state;
+    f.card = (id, honest) => {
+      honest.messages.filter(m => !m.mine).forEach(m => (m.text = null));
+      if (!honest.card.mine) honest.card.title = null;
+      return honest;
+    };
+    const allowed = await fields.run(['verify']);
+    assert.equal(allowed.code, 0, allowed.all);
+    assert.match(allowed.stdout, /withheld {2}2 cards or messages were compared without their title or text: this key is class fields/);
+    f.card = (id, honest) => {
+      honest.messages.forEach(m => (m.text = null));
+      return honest;
+    };
+    const own = await fields.run(['verify']);
+    assert.equal(own.code, 5, own.all);
+    assert.equal(own.stdout.match(/the board gave no text, which this key is to receive/g).length, 4, 'our four messages on the first card');
+    assert.match(own.stdout, /differs {3}card 0b6f2c1e-0000-4000-8000-000000000002: the board gave no title or no report text/, 'and the report of our own notice');
+  } finally {
+    await fake.close();
+    await fields.close();
+  }
+});
+
+test('a room called constructor is a room like any other, and a local error is never a pass', async () => {
+  const fake = await fakeBoard('odd-name');
+  try {
+    const { state } = fake;
+    // The members' entries alone, linked again for a room of that name.
+    state.room = 'constructor';
+    state.entries = rebuilt('constructor', state.entries.filter(e => e.card === null));
+    state.details = new Map();
+    for (const run of [1, 2]) {
+      const r = await fake.run(['verify']);
+      assert.equal(r.code, 0, r.all);
+      assert.match(r.stdout, /^room constructor: verified$/m);
+      assert.match(r.stdout, run === 1 ? /no head was saved for this room: this is its first check/ : /entry 2 was the head at the last check \(\S+\): it is still in the record/);
+    }
+    const saved = JSON.parse(readFileSync(join(home('odd-name'), 'chain-heads.json'), 'utf8'));
+    assert.deepEqual(Object.keys(saved.rooms), ['constructor']);
+    assert.deepEqual([saved.rooms.constructor.seq, saved.rooms.constructor.hash], [2, state.entries[1].hash]);
+    // The saved head is used: the same room with another record does not verify.
+    state.entries = rebuilt('constructor', state.entries.map(e => ({ ...e, time: 5 })));
+    const changed = await fake.run(['verify', 'constructor']);
+    assert.equal(changed.code, 5, changed.all);
+    assert.match(changed.stdout, /differs {3}entry 2 is not the entry that was the head when it was last checked/);
+    // By name too, and --json.
+    assert.equal(JSON.parse((await fake.run(['verify', 'constructor', '--json'])).stdout).rooms[0].room, 'constructor');
+
+    // Something this program did not foresee must end as a failure of the check, never as a pass. Here the room
+    // verifies, and then the saved heads cannot be written, because the profile directory is read-only.
+    const fresh = await fakeBoard('odd-error');
+    try {
+      assert.equal((await fresh.run(['verify'])).code, 0, 'the room itself verifies');
+      rmSync(join(home('odd-error'), 'chain-heads.json'));
+      chmodSync(home('odd-error'), 0o500);
+      const stopped = await fresh.run(['verify']);
+      assert.equal(stopped.code, 1, stopped.all);
+      assert.match(stopped.stderr, /^verify: a local error stopped the check \(.*\)\. Nothing was verified and no head was saved by this run\.$/m);
+      assert.ok(!stopped.stdout.includes('verified'), stopped.stdout);
+      const json = await fresh.run(['verify', '--json']);
+      assert.deepEqual([json.code, json.stdout], [1, ''], 'no JSON that says ok');
+    } finally {
+      chmodSync(home('odd-error'), 0o700);
+      await fresh.close();
+    }
+  } finally {
+    await fake.close();
+  }
+});
+
+test('verify reads no further than the head it was first given, and a board whose pages or card list do not end is not followed', async () => {
+  const fake = await fakeBoard('endless');
+  try {
+    const { state } = fake;
+    const honest = { chain: state.chain, cards: state.cards };
+    const reset = () => {
+      Object.assign(state, honest);
+      state.asked.length = 0;
+    };
+    // A record that grows as fast as it is read: every answer names a head 2000 entries further on and gives a
+    // full page. The client reads to the first head it was named, sees that the room has moved, tries twice more
+    // and stops as uncertain. It does not follow the board.
+    const entryLike = seq => ({ ...state.entries[0], seq });
+    state.chain = url => {
+      const after = Number(url.searchParams.get('after'));
+      const limit = Number(url.searchParams.get('limit'));
+      return { room: 'a-x', format: 'p2paecn-chain-1', entries: Array.from({ length: limit }, (_, i) => entryLike(after + i + 1)), head: { seq: after + 2000, hash: 'ab'.repeat(32) } };
+    };
+    const growing = await fake.run(['verify']);
+    assert.equal(growing.code, 3, growing.all);
+    assert.match(growing.stderr, /uncertain: room a-x kept changing while it was being checked/);
+    assert.equal(fake.chainRequests(), 9, 'three tries of two pages and one look after the head, and no more');
+
+    // A head beyond what this client reads at all.
+    reset();
+    state.chain = (url, real) => ({ ...real, head: { seq: 2000001, hash: real.head.hash } });
+    const huge = await fake.run(['verify']);
+    assert.equal(huge.code, 5, huge.all);
+    assert.match(huge.stdout, /differs {3}the board names entry 2000001 as the head, more than the 2000000 entries this client reads/);
+    assert.equal(fake.chainRequests(), 1);
+
+    // A page that makes no progress: the board names entry 12 and gives seven entries, then nothing, for ever.
+    reset();
+    state.chain = (url, real) => ({ ...real, entries: real.entries.filter(e => e.seq <= 7) });
+    const stalled = await fake.run(['verify']);
+    assert.equal(stalled.code, 5, stalled.all);
+    assert.match(stalled.stdout, /differs {3}the head the board names \(entry 12\) is not the last entry it gave \(entry 7\)/);
+    assert.equal(fake.chainRequests(), 2, 'the page that came short ends the fetch; one look after the head');
+
+    // A board that ignores the limit and sends more than the head it named: what is beyond is left alone.
+    reset();
+    const five = state.entries[4];
+    state.chain = (url, real) => ({ ...real, entries: state.entries.slice(Number(url.searchParams.get('after'))).filter(e => Number(url.searchParams.get('after')) < 5), head: { seq: 5, hash: five.hash } });
+    state.cards = (url, real) => ({ cards: real.cards.slice(-1) });
+    const beyond = JSON.parse((await fake.run(['verify', '--json'])).stdout).rooms[0];
+    assert.deepEqual([beyond.entries, beyond.head.seq], [5, 5], 'twelve were sent, five were taken');
+
+    // A card list whose cursor comes round again.
+    reset();
+    const ids = [...state.details.keys()];
+    state.cards = () => ({ cards: [{ id: ids[0] }], nextCursor: ids[0] });
+    const round = await fake.run(['verify']);
+    assert.equal(round.code, 5, round.all);
+    assert.match(round.stdout, /differs {3}the board listed the same card twice: its card list cannot be read to an end/);
+    assert.ok(state.asked.filter(path => path.includes('/cards')).length <= 2, state.asked.join(' '));
+    // The same cursor twice with different cards, and a page with a cursor and no cards.
+    reset();
+    let page = 0;
+    state.cards = () => ({ cards: [{ id: ids[page++ % 2] }], nextCursor: ids[0] });
+    assert.match((await fake.run(['verify'])).stdout, /differs {3}the board gave the same cursor for its card list twice, or a page without cards: the list does not end/);
+    reset();
+    state.cards = () => ({ cards: [], nextCursor: ids[0] });
+    assert.match((await fake.run(['verify'])).stdout, /the same cursor for its card list twice, or a page without cards/);
+    // A card list that never repeats: new cards and new cursors for ever. The record holds two cards.
+    reset();
+    let n = 0;
+    const made = () => `0b6f2c1e-0000-4000-9000-${String(++n).padStart(12, '0')}`;
+    state.cards = () => {
+      const id = made();
+      return { cards: [{ id }], nextCursor: id };
+    };
+    const endless = await fake.run(['verify']);
+    assert.equal(endless.code, 5, endless.all);
+    assert.match(endless.stdout, /differs {3}the board lists more cards than the 2 its record holds/);
+    assert.equal(state.asked.filter(path => path.includes('/cards')).length, 3);
+    assert.ok(!existsSync(join(home('endless'), 'chain-heads.json')), 'nothing verified, nothing saved');
+
+    // And the honest board still verifies.
+    reset();
+    assert.equal((await fake.run(['verify'])).code, 0);
+  } finally {
+    await fake.close();
+  }
+});

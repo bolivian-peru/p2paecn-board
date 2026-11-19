@@ -137,12 +137,18 @@ async fn a_key_over_its_write_limit_writes_nothing_and_a_replay_is_not_a_write()
 
     let body = notice(3).to_string();
     let idem = Uuid::new_v4().to_string();
-    assert_limited(&raw(&w.app, signed(&b.reseller, "POST", "/v1/rooms/a-x/cards", &body, Some(&idem))).await, 2);
+    let refused_write = signed(&b.reseller, "POST", "/v1/rooms/a-x/cards", &body, Some(&idem));
+    let (same_bytes, same_bytes_again) = (copy(&refused_write, &body), copy(&refused_write, &body));
+    assert_limited(&raw(&w.app, refused_write).await, 2);
     assert_limited(&raw(&w.app, signed(&b.reseller, "POST", "/v1/keys/revoke", r#"{"keyId":"reseller-x/second"}"#, Some(&Uuid::new_v4().to_string()))).await, 2);
     // Nothing was stored and nothing appended to the record. Reads are not writes.
     assert_eq!(head(w, &b.reseller, "a-x").await, before);
     assert_eq!(w.get(&b.reseller, "/v1/rooms/a-x/cards").await.1["cards"].as_array().unwrap().len(), 3);
     assert_eq!(w.get(&b.second, "/v1/keys").await.1["keys"][1]["status"], json!("active"));
+    // The key's own count takes attempts, the ones the rules would refuse included: over its limit, a write
+    // with an empty title gets the 429 before the rules are looked at.
+    let empty_title = r#"{"kind":"notice","title":"","text":"x"}"#;
+    assert_limited(&raw(&w.app, signed(&b.reseller, "POST", "/v1/rooms/a-x/cards", empty_title, Some(&Uuid::new_v4().to_string()))).await, 2);
     // A replay of a write that was done returns its first answer: it is not a new write and is not refused.
     let (status, replayed) = send(&w.app, signed(&b.reseller, "POST", "/v1/rooms/a-x/cards", &first_body, Some(&first_idem))).await;
     let mut expected: Value = serde_json::from_str(&first).unwrap();
@@ -151,10 +157,12 @@ async fn a_key_over_its_write_limit_writes_nothing_and_a_replay_is_not_a_write()
     // The other side's key is not held back by this one.
     assert_eq!(w.post(&b.supplier, "/v1/rooms/a-x/cards", notice(9)).await.0, StatusCode::CREATED);
 
-    // After the window the refused write, sent again with the same idempotency key, is done once.
+    // After the window the refused write is done once, sent again as the very same signed bytes: the 429 took
+    // back the nonce that the signature check had recorded. Once it is accepted, those bytes are a replay.
     until_the_window_ends().await;
-    let (status, done) = send(&w.app, signed(&b.reseller, "POST", "/v1/rooms/a-x/cards", &body, Some(&idem))).await;
+    let (status, done) = send(&w.app, same_bytes).await;
     assert_eq!(status, StatusCode::CREATED, "{done}");
+    assert_eq!(raw(&w.app, same_bytes_again).await, w.unauthorized().await);
     let (status, replay) = send(&w.app, signed(&b.reseller, "POST", "/v1/rooms/a-x/cards", &body, Some(&idem))).await;
     assert_eq!((status, serde_json::from_str::<Value>(&replay).unwrap()["replayed"].clone()), (StatusCode::CREATED, json!(true)));
     assert_eq!(head(w, &b.reseller, "a-x").await["seq"], json!(7), "the other side's card and this one, each once");
@@ -168,9 +176,16 @@ async fn a_room_over_its_write_limit_refuses_every_member_and_other_rooms_go_on(
     let card = card["card"]["id"].as_str().unwrap().to_owned();
     assert_eq!(w.post(&b.supplier, &format!("/v1/cards/{card}/messages"), json!({ "kind": "reply", "text": "Looking at it." })).await.0, StatusCode::CREATED);
     assert_eq!(w.post(&b.supplier, &format!("/v1/cards/{card}/stage"), json!({ "stage": "acknowledged", "text": "Confirmed." })).await.0, StatusCode::OK);
-    // A write the rules refuse still counts: it is the fourth.
-    assert_eq!(w.post(&b.reseller, &format!("/v1/cards/{card}/stage"), json!({ "stage": "shipped", "text": "Our own card." })).await.0, StatusCode::FORBIDDEN);
+    // Writes the rules refuse do not count against the room: a member cannot use up the room's writes with
+    // requests that leave nothing in it. Twenty-one of them, of three kinds, and the room still takes its fourth.
+    for _ in 0..7 {
+        assert_eq!(w.post(&b.reseller, &format!("/v1/cards/{card}/stage"), json!({ "stage": "shipped", "text": "Our own card." })).await.0, StatusCode::FORBIDDEN);
+        assert_eq!(w.post(&b.reseller, &format!("/v1/cards/{card}/stage"), json!({ "stage": "closed", "outcome": "verified", "text": "Too early." })).await.0, StatusCode::CONFLICT);
+        assert_eq!(w.post(&b.second, "/v1/rooms/a-x/cards", json!({ "kind": "notice", "title": "", "text": "No title." })).await.0, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    assert_eq!(w.post(&b.second, &format!("/v1/cards/{card}/messages"), json!({ "kind": "reply", "text": "The fourth accepted write." })).await.0, StatusCode::CREATED);
     let before = head(w, &b.reseller, "a-x").await;
+    assert_eq!(before["seq"], json!(7), "two members, the card, a reply, the two entries of the move, a reply");
 
     // Every kind of write into the room, from every member, is now refused, and the record stands still.
     let idem = || Uuid::new_v4().to_string();
@@ -231,8 +246,24 @@ async fn a_source_over_its_failure_limit_keeps_getting_the_identical_401_and_its
     // A member with a valid signature behind the same address is still served, and never sees a 429 for it.
     let (status, _) = send(&w.app, from("203.0.113.7", signed(&b.reseller, "GET", "/v1/inbox", "", None))).await;
     assert_eq!(status, StatusCode::OK);
-    // The public pages are still served.
+    // The public pages are still served. A request that is served counts nothing and leaves no window: a
+    // thousand visitors from a thousand addresses take no room in the table.
     assert_eq!(raw(&w.app, from("203.0.113.7", plain("GET", "/", ""))).await.status, StatusCode::OK);
+    let windows = w.shared.limits.window_count();
+    for n in 0..1000 {
+        let visitor = format!("198.51.{}.{}", 100 + n / 250, n % 250);
+        assert_eq!(raw(&w.app, from(&visitor, plain("GET", "/", ""))).await.status, StatusCode::OK);
+        let (status, _) = send(&w.app, from(&visitor, signed(&b.supplier, "GET", "/v1/rooms", "", None))).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    assert_eq!(w.shared.limits.window_count(), windows);
+    // An IPv6 caller is counted by its /64: failures from many addresses of one /64 are one count.
+    for n in 0..6 {
+        assert_eq!(raw(&w.app, from(&format!("2001:db8:5:5::{n:x}"), plain("GET", "/v1/inbox", ""))).await, unauthorized);
+    }
+    assert!(w.shared.limits.unsigned_over("2001:db8:5:5::/64", now()));
+    assert_eq!(raw(&w.app, from("2001:db8:5:5:ffff::1", enroll(&code))).await, unauthorized, "another address of that /64 cannot enroll now");
+    assert_eq!(w.op("GET", "/state", Value::Null).await.1["codes"][0]["used"], json!(false));
     // Another address has its own count: its enroll attempt is looked at. A forwarding header is not believed.
     let mut spoofed = from("203.0.113.7", enroll(&code));
     spoofed.headers_mut().insert("x-forwarded-for", "203.0.113.99".parse().unwrap());
@@ -358,8 +389,53 @@ fn the_binary_reads_its_limits_from_the_environment_and_stops_logging_a_source_t
     drop(server);
     let lines: Vec<String> = log.lines().map_while(Result::ok).collect();
     assert_eq!(lines.iter().filter(|l| l.starts_with("refused: missing_header GET")).count(), 4, "{lines:?}");
-    let said: Vec<&String> = lines.iter().filter(|l| l.contains("failed within")).collect();
+    let said: Vec<&String> = lines.iter().filter(|l| l.contains("failed or were enroll attempts within")).collect();
     assert_eq!(said.len(), 1, "{lines:?}");
-    assert!(said[0].starts_with("refused: 4 requests from the source address 127.0.0.1 failed within 60 s"), "{}", said[0]);
+    assert!(said[0].starts_with("refused: 4 requests from the source address 127.0.0.1 failed or were enroll attempts within 60 s"), "{}", said[0]);
     assert_eq!(lines.len(), 5, "twenty-one refusals were not logged: {lines:?}");
+}
+
+/// With the table of source addresses full, the count that fills is the shared window's. The log then says so and
+/// names no address: the address whose request happened to fill it has a count of one.
+#[test]
+fn a_full_table_of_sources_logs_the_shared_window_and_names_no_address() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_p2paecn-board"));
+    child.env("P2PAECN_HOST", HOST).env("P2PAECN_BIND", "127.0.0.1:0").env("P2PAECN_LIMIT_UNSIGNED", "3").env("P2PAECN_LIMIT_WINDOW_SECONDS", "3600")
+        .env("P2PAECN_SOURCE_HEADER", "x-forwarded-for");
+    for name in ["P2PAECN_ADMIN_SOCKET", "P2PAECN_CONFIG", "P2PAECN_STATE", "P2PAECN_LIMIT_KEY_REQUESTS"] {
+        child.env_remove(name);
+    }
+    let mut server = Server(child.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap());
+    let mut log = BufReader::new(server.0.stderr.take().unwrap());
+    let mut started = String::new();
+    log.read_line(&mut started).unwrap();
+    let addr: std::net::SocketAddr = started.split("listening on ").nth(1).and_then(|r| r.split(',').next()).unwrap().parse().unwrap();
+    // The log is read while the requests go out, so that the board never waits on a full pipe.
+    let said = std::thread::spawn(move || log.lines().map_while(Result::ok).filter(|l| l.contains("failed or were enroll attempts")).collect::<Vec<String>>());
+
+    // One connection, one failed request per made-up source address, until the table is full, then four more.
+    let stream = TcpStream::connect(addr).unwrap();
+    let mut answers = BufReader::new(stream.try_clone().unwrap());
+    let mut ask = |source: &str| {
+        (&stream).write_all(format!("GET /v1/inbox HTTP/1.1\r\nHost: board.test\r\nX-Forwarded-For: {source}\r\n\r\n").as_bytes()).unwrap();
+        let mut head = String::new();
+        while !head.ends_with("\r\n\r\n") {
+            answers.read_line(&mut head).unwrap();
+        }
+        let mut body = [0u8; 13];
+        answers.read_exact(&mut body).unwrap();
+        assert!(head.starts_with("HTTP/1.1 401") && &body == b"unauthorized\n", "{head}");
+    };
+    for n in 0..p2paecn_board::rate::MAX_WINDOWS {
+        ask(&format!("198.18.{}.{}", n / 256, n % 256));
+    }
+    for source in ["192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4"] {
+        ask(source);
+    }
+    drop(answers);
+    drop(server);
+    let lines = said.join().unwrap();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].starts_with("refused: 3 requests counted in the shared window failed or were enroll attempts within 3600 s (the table of source addresses is full)"), "{}", lines[0]);
+    assert!(!lines[0].contains("192.0.2.") && !lines[0].contains("198.18."), "an address is named: {}", lines[0]);
 }

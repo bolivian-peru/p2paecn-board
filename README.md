@@ -121,7 +121,10 @@ What it does not have: sync with chat or issue trackers, task dependencies, sche
     checks the signature of every other request, so that a member behind the same address keeps working. So the
     limit bounds code guessing and log volume from one address. It does not bound the processor time unsigned
     requests cost, and it neither slows nor closes connections.
-  - While a source address is over that limit nobody behind it can enroll a key.
+  - While a source address is over that limit nobody behind it can enroll a key. An IPv6 source is counted by
+    its /64. The board keeps counts for 20,000 sources; while that table is full, sources without a count of
+    their own share one, so someone sending from that many addresses can stop enrollment from new addresses for
+    a window at a time.
 - **The room record shows a later change to a member who kept a head. It does not make the operator harmless.**
   Each room has a hash-chained record of its cards, messages, stage moves and membership changes, and
   `p2p.mjs verify` checks it against the cards and against the head it saved the last time
@@ -357,9 +360,10 @@ These say what the code is built and tested to do. What it does not do is under
   card itself, under its own key.
 - **Idempotent writes.** Every write carries an idempotency key, so a retry after a lost answer acts once.
 - **Rate limits.** Per key: requests and, more tightly, writes. Per room: writes. A signed caller over a limit
-  gets `429 rate_limited` with `Retry-After` in seconds, only after its signature has verified and before its
-  nonce is recorded, so the same request can be sent again; nothing is stored and nothing is appended to the room
-  record. The client waits as long as the board asks and tries again, at most three more times, and says so. A
+  gets `429 rate_limited` with `Retry-After` in seconds, only after its signature has verified. The request's
+  nonce stays unused, so the same signed request can be sent again; nothing is stored and nothing is appended to
+  the room record. A key's write count takes every attempt; a room's takes only writes that were accepted, so a
+  member cannot use up a room's writes with requests that leave no trace. The client waits as long as the board asks and tries again, at most three more times, and says so. A
   caller without a valid signature is never told about a limit: it gets the identical 401. Per source address,
   enroll attempts and failed requests are counted, and over the limit the board stops looking at that address's
   enroll attempts and stops logging its refusals one by one. The counts are fixed windows in memory. What the
@@ -376,7 +380,9 @@ These say what the code is built and tested to do. What it does not do is under
   can be set, 28 at most). The cursor names the caller's own rooms and an entry number in each, so it says
   nothing about other rooms, and an event carries no title or text. A key holds at most two such requests, a held
   request counts once against the key's rate limit, a request without a valid signature is never held, and a key
-  revoked or expired while its request is held gets the 401 and no data. The client's `wait` loops over it with
+  revoked or expired while its request is held gets the 401 and no data. A membership change is not delivered
+  on its own, only together with the next other event in that room, so that the long poll does not tell the
+  moment a member arrived. The client's `wait` loops over it with
   a fresh signature each time. It is a way to poll less often, not a delivery guarantee: what arrives while
   nobody is asking is found by reading the inbox.
 - **A hash-chained record per room.** Every accepted card, message and stage move, and every membership change

@@ -103,7 +103,9 @@ tokio::task_local! {
 /// over it is told nothing. It gets the same 401 as before, byte for byte. What changes is on the server's side:
 ///
 /// - an enroll attempt from that address is answered with the 401 at once, before its code or signature is
-///   looked at, until the window ends. That bounds how many codes one address can try;
+///   looked at, until the window ends. That bounds how many codes one address can try. Every enroll attempt
+///   counts, whatever its answer, and so does every other request that ends in the 401. A request that is served
+///   counts nothing and leaves no window for its address;
 /// - a refusal from that address is no longer logged line by line. One line says that the limit was reached.
 ///   That bounds what one address can write into the log.
 ///
@@ -117,12 +119,20 @@ async fn unsigned_guard(State(s): App, peer: Option<Extension<Peer>>, req: Reque
     if over && req.uri().path() == "/v1/enroll" {
         return unauthorized();
     }
+    let enroll = req.uri().path() == "/v1/enroll";
     let response = QUIET.scope(over, next.run(req)).await;
-    if response.status() == StatusCode::UNAUTHORIZED && s.limits.unsigned_failed(&source, now) == crate::rate::Failed::ReachedLimit {
-        eprintln!(
-            "refused: {} requests from the source address {source} failed within {} s; until that time has passed its enroll attempts are not looked at and its refusals are not logged",
-            s.limits.config.unsigned, s.limits.config.window
-        );
+    if enroll || response.status() == StatusCode::UNAUTHORIZED {
+        let (limit, window) = (s.limits.config.unsigned, s.limits.config.window);
+        match s.limits.unsigned_failed(&source, now) {
+            crate::rate::Failed::ReachedLimit { shared: false } => eprintln!(
+                "refused: {limit} requests from the source address {source} failed or were enroll attempts within {window} s; until that time has passed its enroll attempts are not looked at and its refusals are not logged"
+            ),
+            // The count that filled is not this address's own, so no address is named.
+            crate::rate::Failed::ReachedLimit { shared: true } => eprintln!(
+                "refused: {limit} requests counted in the shared window failed or were enroll attempts within {window} s (the table of source addresses is full); until that time has passed, enroll attempts from addresses without a window of their own are not looked at and their refusals are not logged"
+            ),
+            _ => {}
+        }
     }
     response
 }
@@ -758,6 +768,11 @@ fn wait_query(query: Option<&str>) -> Result<WaitQuery<'_>, Refusal> {
 /// the same facts for every key class, and no title or text. Entries the caller's own organisation made are
 /// passed over: they move the cursor and are not events. A room the cursor does not name is new to the caller,
 /// and all of its record counts. Without a cursor nothing is an event and the cursor is where the rooms stand.
+///
+/// Membership entries (`member-added`, `member-removed`) are not delivered on their own. They carry no time in the
+/// record so that the moment a handle arrived cannot be read from it; a long poll that answered the moment the
+/// operator added a member would give that moment away. So they do not answer a held request, and they become
+/// events, and the cursor moves past them, only together with a later entry of another kind in the same room.
 fn news(store: &Store, agent: &Agent, q: &WaitQuery<'_>) -> (Vec<Value>, String, bool) {
     let mut events = Vec::new();
     let mut cursor = Vec::new();
@@ -768,14 +783,24 @@ fn news(store: &Store, agent: &Agent, q: &WaitQuery<'_>) -> (Vec<Value>, String,
         // A cursor ahead of the record (a board restored from a backup) starts again at the head.
         let from = q.after.as_ref().map_or(head, |c| c.get(room.id.as_str()).copied().unwrap_or(0)).min(head);
         let own = room.display_name(&agent.org);
+        let event = |e: &chain::Entry| json!({ "room": room.id, "seq": e.seq, "kind": e.kind, "card": e.card, "actor": e.actor, "time": e.time });
         let mut seen = from;
-        for e in &entries[from as usize..] {
-            if e.actor != own {
+        // Membership entries wait here until an entry of another kind follows them.
+        let mut held_back: Vec<&chain::Entry> = Vec::new();
+        'room: for e in &entries[from as usize..] {
+            if e.kind == "member-added" || e.kind == "member-removed" {
+                held_back.push(e);
+                continue;
+            }
+            // An entry of another kind: what was held back goes out before it, as far as the answer has room.
+            let news = (e.actor != own).then_some(e);
+            for entry in held_back.drain(..).chain(news) {
                 if events.len() == WAIT_EVENTS_MAX {
                     more = true;
-                    break;
+                    break 'room;
                 }
-                events.push(json!({ "room": room.id, "seq": e.seq, "kind": e.kind, "card": e.card, "actor": e.actor, "time": e.time }));
+                events.push(event(entry));
+                seen = entry.seq;
             }
             seen = e.seq;
         }
@@ -1032,10 +1057,13 @@ fn write<E: Into<Denied>>(
         again["replayed"] = json!(true);
         return reply(first.status, again);
     }
-    // A new write, not a replay: counted against the key's writes and the room's. Over a limit, nothing is done
-    // and nothing is stored, so the same request with the same idempotency key can be sent again.
+    // A new write, not a replay. The attempt is counted against the key's writes; the room is only asked whether
+    // it has had its accepted writes. Over either limit nothing is done and nothing is stored, and the nonce this
+    // request recorded when its signature was checked is taken back: the very same signed request can be sent
+    // again later.
     let now = now_unix();
-    if let Err(retry_after) = s.limits.write(&agent.key_id, room, now) {
+    if let Err(retry_after) = s.limits.write_attempt(&agent.key_id, room, now) {
+        store.forget_nonce(&agent.key_id, header(headers, "p2p-nonce").unwrap_or_default());
         return rate_limited(retry_after);
     }
     let before = s.snapshot(&store);
@@ -1044,7 +1072,14 @@ fn write<E: Into<Denied>>(
             store.replays.insert(slot, Replay { fingerprint, status, body: value.clone() });
             // Saved, replay record included, before the answer goes out; if that fails, undone and not answered.
             match s.commit(&mut store, before) {
-                Ok(()) => reply(status, value),
+                Ok(()) => {
+                    // Only a write that was accepted and saved counts against the room: a write the rules refuse
+                    // leaves no trace in the room and uses up none of its writes.
+                    if let Some(room) = room {
+                        s.limits.room_wrote(room, now);
+                    }
+                    reply(status, value)
+                }
                 Err(refusal) => refuse(refusal),
             }
         }

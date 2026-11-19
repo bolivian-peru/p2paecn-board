@@ -44,8 +44,8 @@ tested to", not as "is proven to".
 | Text from the board runs as markup in the web view | The script builds the page with text nodes only, and the page's policy allows no inline script | `src/app.js`, `tests/viewer.rs` |
 | A browser key is copied out of the browser | The key is made non-extractable with WebCrypto, so the page's script cannot export it. Anything that runs in the page's origin, or controls the browser profile, can still make it sign. Serve the board on an origin of its own | `src/app.js` |
 | The operator channel is reached from the network | It is a Unix socket, not a network port, and its paths do not exist on the public listener. Against other local users: the socket is created under the process umask and set to mode 0600 just after, so the 0700 directory and the umask 077 that the runbook and the systemd unit set are what keep them out | `src/operator.rs` |
-| A member's key floods the board or a room | Per key a limit on signed requests and a tighter one on writes, per room a limit on writes, each a count per window. Over it: `429` with `Retry-After`, nothing stored, nothing appended to the room record. A replay of a captured request is the 401 and is not counted. A member with several keys has several budgets, and the counts are forgotten at a restart | `src/rate.rs`, `src/api.rs`, `tests/rate.rs` |
-| Someone without a key tries enrollment codes, or fills the log with refusals | Enroll attempts and requests answered with the 401 are counted per source address. Over the limit the board answers that address's enroll attempts with the 401 without looking at them, and logs one line in place of each refusal. The caller sees the identical 401 throughout. Behind a proxy the source address is the proxy's unless `P2PAECN_SOURCE_HEADER` is set: see "Volume" below | `src/rate.rs`, `src/api.rs`, `tests/rate.rs` |
+| A member's key floods the board or a room | Per key a limit on signed requests and a tighter one on writes, per room a limit on writes, each a count per window. Over it: `429` with `Retry-After`, nothing stored, nothing appended to the room record. A key's write count takes attempts; a room's takes only accepted writes, so a member cannot use up a room's writes with requests the rules refuse and that leave no trace in the room. A member can still fill a room's count with accepted writes, which all members see. A replay of a captured request is the 401 and is not counted. A member with several keys has several budgets, and the counts are forgotten at a restart | `src/rate.rs`, `src/api.rs`, `tests/rate.rs` |
+| Someone without a key tries enrollment codes, or fills the log with refusals | Enroll attempts and requests answered with the 401 are counted per source address. Over the limit the board answers that address's enroll attempts with the 401 without looking at them, and logs one line in place of each refusal. The caller sees the identical 401 throughout. An IPv6 source is counted by its /64. A request that is served is not counted and takes no room in the table. The table holds 20,000 sources; while it is full, sources without a window of their own share one, so whoever can send from that many addresses can stop enrollment from new addresses for a window at a time. Behind a proxy the source address is the proxy's unless `P2PAECN_SOURCE_HEADER` is set: see "Volume" below | `src/rate.rs`, `src/api.rs`, `tests/rate.rs` |
 | A caller uses the long poll to hold connections, or to learn about rooms it is not in | Only a request whose signature verified is held: everything else gets the 401 at once. At most two held requests per key, each for at most the cap (25 seconds by default, 28 at most), each counted against the key's rate limit. The cursor and the events cover the caller's own rooms only, a write elsewhere neither answers a held request nor shows in its cursor, and an event has no title or text. A key revoked or expired while its request is held gets the 401 and no data. The total of held requests is not bounded beyond two per key | `src/api.rs`, `tests/wait.rs` |
 | A member is misled by a claim, or locked out by one | A claim blocks nothing: no route but the claim route looks at it, so replies and moves go on. It ends by the clock, and only the claiming organisation renews or releases it. Its holder is shown under the room's name for it, never an organisation id in a shared room, and its note passes the content gate and is withheld from another organisation's `fields` key. A claim shown without its entry in the room record, or changed, fails the client's `verify`. A claim taken off a card does not: see below | `src/api.rs`, `src/chain.rs`, `tests/claim.rs`, `client-test/verify.test.mjs` |
 | A slow client holds connections open | A request head must arrive within 10 seconds and a request is answered within 30 | `src/api.rs` |
@@ -136,6 +136,9 @@ the head saved at the last check is still in the record at the same place.
 
 What it does not show:
 
+- **Anything about answers the board gives outside that run.** `verify` vouches for what the board served to
+  `verify`. A board could serve one history to `verify` and another to `show`, to the web view or to another
+  member. A check that passed says nothing about a later answer.
 - **Anything before the first saved head.** The first check compares the board with itself. Whoever can write the
   state file can change a text and make every hash again, and a member without an earlier head sees a record that
   verifies. `client-test/verify.test.mjs` runs exactly this: the rewritten record fails for the key that had saved
@@ -159,8 +162,10 @@ What it does not show:
 What the record adds for a reader, which is new: every member of a room, `fields` keys included, receives the
 SHA-256 of each payload. A hash reveals no text, but it confirms an exact guess of a whole payload. A member who
 joins a shared room later sees how many membership changes came before, and can test a guessed handle against a
-membership entry. Membership entries carry no time, because an exact time could link a handle's arrival to a pair
-room's appearance. Their position still shows between which two entries the change happened.
+membership entry. Membership entries carry no time, and the long poll does not deliver them on their own, because
+a recorded or pushed time could link a handle's arrival to a pair room's appearance. That protects only against
+a member who was not watching: one who polls the room list or the record sees a member appear between two of its
+own requests, and nothing stops that. Their position still shows between which two entries the change happened.
 
 ## Known weak points in the build
 

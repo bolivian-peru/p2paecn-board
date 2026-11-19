@@ -237,7 +237,8 @@ paths:
         the cursor to start from). Otherwise the request is held until an event arrives or `wait` seconds have
         passed (at most the board's cap, 25 seconds by default, 28 at most), and then answered with no events and
         `timedOut: true`. An event is an entry of a room's record without its hashes; entries made by the caller's
-        own organisation are passed over. At most two requests of one key are held at a time. A held request
+        own organisation are passed over, and a membership entry is delivered only together with the next
+        entry of another kind in its room, never on its own. At most two requests of one key are held at a time. A held request
         counts as one request against the key's rate limit. A request without a valid signature is never held,
         and a key revoked or expired while its request is held gets the 401 and no events. `GET /v1/inbox` is
         unchanged.

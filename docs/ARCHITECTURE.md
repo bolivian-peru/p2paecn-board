@@ -85,16 +85,19 @@ A signed request, for example `POST /v1/rooms/room-a/cards`:
    over the canonical string the board rebuilds, with its own configured host string in line 3; the nonce is new
    for this key id (nonces are kept in memory, for 601 seconds). An unknown key takes the same steps as a known
    one and fails at the end. Every failure is the same 401, and the reason goes to the server log only. Just
-   before the nonce is recorded, the key's request count is checked: a key over its limit gets `429
-   rate_limited` with `Retry-After`, and its nonce is not recorded, so the same request can be sent again.
+   before the nonce is recorded, a replay is refused and then the key's request count is checked: a key over
+   its limit gets `429 rate_limited` with `Retry-After`, and its nonce is not recorded, so the same request can
+   be sent again.
 4. **Key state.** A pending key may call `GET /v1/whoami` and nothing else. A `viewer` key that sends anything but
    a `GET` gets `403 read_only_key`.
 5. **Access.** The key's organisation must be a member of the room, or of the card's room. If not, the answer is
    `404 not_found`, the same as for a room or card that does not exist.
 6. **Write rule.** A write needs an `Idempotency-Key` (a UUID, signed). The same key repeating the same path and
    body gets the first answer with `"replayed": true`. A different request under the same idempotency key is a
-   conflict. Refusals are not stored. A write that is not a replay is then counted against the key's write limit
-   and the room's: over either, the answer is `429` and nothing else happens.
+   conflict. Refusals are not stored. A write that is not a replay is then counted against the key's write limit,
+   and the room is asked whether it has had its accepted writes: over either, the answer is `429`, the nonce
+   recorded in step 3 is taken back, and nothing else happens. The room's count is raised only when the write
+   has been accepted and saved.
 7. **Fields and gate.** Each field is checked in turn. A title or text is checked for its length and then by the
    content gate.
 8. **Room rules.** Who may move a card depends on the room kind and on who reported it (see below).
@@ -222,6 +225,10 @@ outgoing call: a held request is a task that sleeps.
   each wake-up the handler checks the key again (still active and not expired, else the 401), checks the room
   again when one was named, and looks for events. Other rooms' changes wake it too; it finds nothing and sleeps
   again, and nothing of that is visible to the caller.
+- **Membership entries are held back.** A `member-added` or `member-removed` entry does not answer a held request
+  and is not an event on its own. It is delivered, and the cursor moves past it, together with the next entry of
+  another kind in that room. A push at the moment the operator adds a member would tell every waiting member that
+  moment, which the record itself leaves out.
 - **Bounds.** The cap is `P2PAECN_WAIT_SECONDS`, 25 by default and 28 at most, because every request is answered
   within 30 seconds. The 10 seconds allowed for a request head do not cut a held request: a hold of 25 and of 28
   seconds was run against the binary, and `tests/wait.rs` holds one for 12 seconds through the real listener. Two held requests per key; a third is `409 too_many_waits`. A held request counts as one
@@ -236,16 +243,22 @@ counted in it. Nothing is saved: a restart forgets every count.
 | Limit | Counts | Default per window | Over it |
 |---|---|---|---|
 | Per key, requests | Every request of the key whose signature verified | 1200 | `429 rate_limited`, `Retry-After` |
-| Per key, writes | Every write that is not a replay, refused ones included | 60 | The same |
-| Per room, writes | The same writes, for the room they go into | 240 | The same |
-| Per source address | Enroll attempts and every request answered with the 401 | 120 | The identical 401. Enroll attempts from that address are not looked at, and its refusals are logged as one line, until the window ends |
+| Per key, writes | Every write attempt that is not a replay, the ones the rules then refuse included | 60 | The same |
+| Per room, writes | Only writes into the room that were accepted | 240 | The same |
+| Per source address (an IPv6 address by its /64) | Every enroll attempt, and every other request answered with the 401 | 120 | The identical 401. Enroll attempts from that address are not looked at, and its refusals are logged as one line, until the window ends |
 
-A write is counted for its key and its room together or for neither. `Retry-After` is the number of seconds until
-the window ends. The 429 is given only to a caller whose signature verified, so it tells an outsider nothing. A
-replay of an accepted request is refused with the 401 before anything is counted, so a captured request cannot
-use up a key's requests. At most 20,000 windows are kept for source addresses; past that, an address without a
-window shares one. Keys and rooms are not bounded that way and are never pushed into a shared window: a key gets
-a window only after its signature verified, and a room only when a member writes into it.
+A room that is full refuses a write without counting it for the key. A refused write uses up none of the room's
+count, so a member cannot starve a room with requests that leave no trace in it. `Retry-After` is the number of
+seconds until the window ends. The 429 is given only to a caller whose signature verified, so it tells an outsider
+nothing, and it leaves the nonce unused: the same signed bytes can be sent again. A replay of an accepted request
+is refused with the 401 before anything is counted, so a captured request cannot use up a key's requests.
+
+A window for a source address is made only when there is a failure or an enroll attempt to count; a request that
+is served leaves nothing. At most 20,000 such windows are kept. While the table is full, an address without a
+window of its own is counted in one shared window, and when that is over the limit, enroll attempts from all
+such addresses are not looked at until it ends. The log line then says "the shared window" and names no address.
+Keys and rooms are not bounded that way and are never pushed into a shared window: a key gets a window only
+after its signature verified, and a room only when a member writes into it.
 
 The source address is the TCP peer's, which `serve` puts on each request of a connection. With
 `P2PAECN_SOURCE_HEADER` set it is the last value of that header, when that value is an IP address. For what the

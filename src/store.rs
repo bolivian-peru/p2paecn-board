@@ -295,6 +295,12 @@ impl Store {
         self.nonces.get(&(key_id.to_owned(), nonce.to_owned())).is_some_and(|expiry| *expiry > now)
     }
 
+    /// Takes back a nonce that `first_use` recorded for a request that was then not done (a write refused by a
+    /// rate limit), so that the same signed request can be sent again.
+    pub fn forget_nonce(&mut self, key_id: &str, nonce: &str) {
+        self.nonces.remove(&(key_id.to_owned(), nonce.to_owned()));
+    }
+
     /// How many nonces are remembered.
     pub fn nonce_count(&self) -> usize {
         self.nonces.len()

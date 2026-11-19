@@ -91,6 +91,8 @@ const ROOM_KINDS = ['pair', 'shared'];
 const CHAIN_FORMAT = 'p2paecn-chain-1';
 const CHAIN_GENESIS = '0'.repeat(64);
 const CHAIN_PAGE = 1000;
+// `verify` reads no record longer than this. A board that names a longer one is not believed.
+const CHAIN_MAX_ENTRIES = 2000000;
 const HASH = /^[0-9a-f]{64}$/;
 const CHAIN_ACTOR = /^(?:[a-z0-9-]{3,32}|\*operator|\*import)$/;
 // How often `verify` starts a room again when the room changed while it was being read.
@@ -600,24 +602,46 @@ const isCount = value => Number.isSafeInteger(value) && value >= 0;
 const isHead = head => isObject(head) && isCount(head.seq) && HASH.test(head.hash);
 const isChainPage = a => Array.isArray(a.entries) && a.entries.every(isObject) && isHead(a.head);
 
-/** Every entry of a room's record, fetched a page at a time, with the head the board gave last. */
-async function fetchChain(ctx, room, after = 0) {
+/** What the board gave cannot be read to an end, so the room cannot be verified. Becomes a problem of that room. */
+class Unverifiable extends Error {}
+
+/**
+ * The entries of a room's record up to the head that the first answer names, fetched a page at a time. What is
+ * appended after that first answer is left for the next run, so a room that keeps growing, or a board that keeps
+ * naming a later head, cannot keep this going. Every page must bring what was asked for: a page that brings fewer
+ * entries than the record is said to hold ends the fetch, and the check then finds that the head is not the last
+ * entry given.
+ */
+async function fetchChain(ctx, room) {
   const entries = [];
+  let head = null;
   for (;;) {
-    const page = await read(ctx, `/v1/rooms/${room}/chain?after=${after + entries.length}&limit=${CHAIN_PAGE}`, isChainPage);
-    entries.push(...page.entries);
-    if (!page.entries.length || after + entries.length >= page.head.seq) return { entries, head: page.head };
+    const page = await read(ctx, `/v1/rooms/${room}/chain?after=${entries.length}&limit=${CHAIN_PAGE}`, isChainPage);
+    head ??= page.head;
+    if (head.seq > CHAIN_MAX_ENTRIES) throw new Unverifiable(`the board names entry ${head.seq} as the head, more than the ${CHAIN_MAX_ENTRIES} entries this client reads`);
+    const want = Math.min(CHAIN_PAGE, head.seq - entries.length);
+    entries.push(...page.entries.slice(0, Math.max(0, want)));
+    if (page.entries.length < want || entries.length >= head.seq) return { entries, head };
   }
 }
 
-/** Every card of a room with its thread: the card list a page at a time, then each card on its own. */
-async function fetchCards(ctx, room) {
+/**
+ * Every card of a room with its thread: the card list a page at a time, then each card on its own. `most` is how
+ * many cards the room's record holds. The list must come to an end: a cursor or a card that comes twice, or more
+ * cards than the record has entries for, stops it.
+ */
+async function fetchCards(ctx, room, most) {
   const ids = [];
+  const cursors = new Set();
   for (let cursor = ''; ;) {
     const page = await read(ctx, `/v1/rooms/${room}/cards?limit=100${cursor && `&cursor=${cursor}`}`, a => objects(a.cards) && a.cards.every(c => UUID.test(c.id)));
     ids.push(...page.cards.map(c => c.id));
+    if (new Set(ids).size !== ids.length) throw new Unverifiable('the board listed the same card twice: its card list cannot be read to an end');
+    if (ids.length > most) throw new Unverifiable(`the board lists more cards than the ${most} its record holds`);
     if (!page.nextCursor) break;
-    if (!UUID.test(page.nextCursor)) throw new Exit(3, 'uncertain: the board gave a cursor that is not a card id. Re-run the same command.');
+    if (!UUID.test(page.nextCursor)) throw new Unverifiable('the board gave a cursor for its card list that is not a card id');
+    if (cursors.has(page.nextCursor) || !page.cards.length) throw new Unverifiable('the board gave the same cursor for its card list twice, or a page without cards: the list does not end');
+    cursors.add(page.nextCursor);
     cursor = page.nextCursor;
   }
   const cards = [];
@@ -703,6 +727,10 @@ function checkContent(entries, members, cards, keyClass) {
   // An entry agrees with what the board shows when author, time and payload hash are the same. `values` is null
   // when this key may not read the title or text (class fields): then only author and time are compared.
   const agrees = (e, author, time, kind, values) => e.actor === author && e.time === time && (values === null || e.payload === payloadHash(kind, values));
+  // The one case in which a title or text may be missing: a key of class fields, for what another organisation
+  // wrote. A text key gets every text, and a fields key gets its own organisation's. Anywhere else a missing
+  // title or text means the board held something back from this check, and the room does not verify.
+  const mayBeWithheld = item => keyClass === 'fields' && !ours(item);
   const seen = new Set();
   for (const { card, messages } of cards) {
     const id = card.id;
@@ -717,8 +745,11 @@ function checkContent(entries, members, cards, keyClass) {
     } else {
       const readable = typeof card.title === 'string' && (!report || typeof report.text === 'string');
       const values = readable ? { kind: card.kind, severity: card.severity, title: card.title, message: report?.id, text: report?.text } : null;
-      if (!readable) count.withheld++;
-      if (!agrees(of.card[0], card.reporter, card.created, 'card', values)) {
+      const owed = (typeof card.title !== 'string' && !mayBeWithheld(card)) || (report && typeof report.text !== 'string' && !mayBeWithheld(report));
+      if (!readable && !owed) count.withheld++;
+      if (owed) {
+        problems.push(`card ${id}: the board gave no title or no report text, which this key is to receive: it cannot be compared with the record`);
+      } else if (!agrees(of.card[0], card.reporter, card.created, 'card', values)) {
         problems.push(`card ${id}: its kind, severity, title, report, reporter or time is not what entry ${of.card[0].seq} of the record holds`);
       }
     }
@@ -727,7 +758,8 @@ function checkContent(entries, members, cards, keyClass) {
     for (const m of thread) {
       const values = typeof m.text === 'string' ? { id: m.id, kind: m.kind, replaces: m.replaces, text: m.text } : null;
       const at = left.findIndex(e => agrees(e, m.author, m.created, 'message', values));
-      if (values === null) count.withheld++;
+      if (values === null && mayBeWithheld(m)) count.withheld++;
+      if (values === null && !mayBeWithheld(m)) problems.push(`message ${field(m.id, UUID)} on card ${id}: the board gave no text, which this key is to receive: it cannot be compared with the record`);
       if (at === -1) problems.push(`message ${field(m.id, UUID)} on card ${id}: its text, kind, author or time is not in the record`);
       else left.splice(at, 1);
     }
@@ -762,7 +794,9 @@ function checkContent(entries, members, cards, keyClass) {
 /** The saved heads of this profile: { board, rooms: { <room>: { seq, hash, checked } } }. Empty when none. */
 function readHeads(home, url) {
   const path = join(home, 'chain-heads.json');
-  const empty = { format: CHAIN_FORMAT, board: url, rooms: {} };
+  // Room ids are the names of this object's members. It has no prototype, so that a room called `constructor`
+  // is a room like any other and not something the object already has.
+  const empty = { format: CHAIN_FORMAT, board: url, rooms: Object.create(null) };
   if (!existsSync(path)) return empty;
   if ((statSync(path).mode & 0o077) !== 0) throw usage(`${path} is open to other users, so it is no evidence of anything. Run: chmod 600 '${path}'`);
   let saved;
@@ -774,7 +808,7 @@ function readHeads(home, url) {
   if (!isObject(saved) || saved.format !== CHAIN_FORMAT || saved.board !== url || !isObject(saved.rooms)) {
     throw usage(`${path} is not the saved heads of this board. Restore it from a backup, or move it away to start again`);
   }
-  const rooms = {};
+  const rooms = Object.create(null);
   for (const [room, head] of Object.entries(saved.rooms)) {
     if (!ROOM_ID.test(room) || !isHead(head) || !isCount(head.checked)) throw usage(`${path} holds something that is not a saved head. Restore it from a backup, or move it away to start again`);
     rooms[room] = { seq: head.seq, hash: head.hash, checked: head.checked };
@@ -785,13 +819,33 @@ function readHeads(home, url) {
 /** One room: read it, check it, and read the record's end once more to see that the room stood still meanwhile. */
 async function verifyRoom(ctx, room, members, saved) {
   for (let attempt = 1; ; attempt++) {
-    const { entries, head } = await fetchChain(ctx, room);
-    const cards = await fetchCards(ctx, room);
-    const since = await fetchChain(ctx, room, entries.length);
+    const failed = (message, head = { seq: 0, hash: CHAIN_GENESIS }, read = 0) => ({ room, ok: false, head, entries: read, cards: 0, messages: 0, withheld: 0,
+      imported: 0, unknown: 0, members: members.length, saved: saved || null, problems: [message] });
+    let chain;
+    try {
+      chain = await fetchChain(ctx, room);
+    } catch (e) {
+      if (e instanceof Unverifiable) return failed(e.message);
+      throw e;
+    }
+    const { entries, head } = chain;
+    let cards = null;
+    let unreadable = '';
+    try {
+      // A record that came short of its head has already failed: its cards are not read against it.
+      cards = entries.length === head.seq ? await fetchCards(ctx, room, entries.filter(e => e.kind === 'card').length) : [];
+    } catch (e) {
+      if (!(e instanceof Unverifiable)) throw e;
+      unreadable = e.message;
+    }
+    // One look at what came after the head this run started from. A card posted while the list was read is a
+    // reason to start again, not a reason to say the list does not fit the record.
+    const since = await read(ctx, `/v1/rooms/${room}/chain?after=${head.seq}&limit=1`, isChainPage);
     if (since.entries.length || since.head.seq !== head.seq || since.head.hash !== head.hash) {
       if (since.head.seq > head.seq && attempt < VERIFY_TRIES) continue;
       if (since.head.seq > head.seq) throw new Exit(3, `uncertain: room ${room} kept changing while it was being checked. Re-run the same command.`);
     }
+    if (cards === null) return failed(unreadable, head, entries.length);
     let problems = checkLinks(room, entries, head);
     if (since.head.seq < head.seq || (since.head.seq === head.seq && since.head.hash !== head.hash)) problems.push('the board named two different heads within this one run');
     let count = { cards: cards.length, messages: 0, withheld: 0, imported: 0, unknown: 0 };
@@ -810,9 +864,20 @@ async function verifyRoom(ctx, room, members, saved) {
  * verify [room]: checks the record of one room, or of every room of this organisation, and remembers the head of
  * each room that verified. Prints no text written by another organisation, so nothing here needs marker lines.
  */
-async function verify(ctx, flags, [only]) {
+async function verify(ctx, flags, args) {
+  try {
+    await verifyRooms(ctx, args);
+  } catch (e) {
+    if (e instanceof Exit) throw e;
+    // Anything this program did not foresee ends the check as a failure of the check, never as a pass.
+    throw new Exit(1, `verify: a local error stopped the check (${clean(e?.message ?? e, true)}). Nothing was verified and no head was saved by this run.`);
+  }
+}
+
+async function verifyRooms(ctx, [only]) {
   if (only !== undefined && !ROOM_ID.test(only)) throw usage('verify [room]: a room id is 3 to 64 of a-z, 0-9 and -');
-  const listed = (await read(ctx, '/v1/rooms', a => objects(a.rooms))).rooms.filter(r => ROOM_ID.test(r.id));
+  const rooms = (await read(ctx, '/v1/rooms', a => objects(a.rooms))).rooms.filter(r => ROOM_ID.test(r.id));
+  const listed = rooms.filter((r, i) => rooms.findIndex(other => other.id === r.id) === i);
   const wanted = only === undefined ? listed : listed.filter(r => r.id === only);
   if (only !== undefined && !wanted.length) throw new Exit(2, 'refused by the board: not_found (this key sees no such room)');
   const heads = readHeads(ctx.home, ctx.profile.url);
@@ -820,7 +885,7 @@ async function verify(ctx, flags, [only]) {
   const results = [];
   for (const room of wanted) {
     const members = [room.you, ...(Array.isArray(room.others) ? room.others : [])].filter(name => typeof name === 'string');
-    const result = await verifyRoom(ctx, room.id, members, heads.rooms[room.id]);
+    const result = await verifyRoom(ctx, room.id, members, Object.hasOwn(heads.rooms, room.id) ? heads.rooms[room.id] : undefined);
     results.push(result);
     // Only a room that verified moves its saved head. A failed room keeps the old one: it is the evidence.
     if (result.ok) heads.rooms[room.id] = { seq: result.head.seq, hash: result.head.hash, checked: now };
@@ -1149,7 +1214,8 @@ async function revoke(ctx, flags, [keyId]) {
 
 /**
  * wait [--timeout <seconds>] [room]: asks the board's long poll again and again, each request signed afresh, until
- * another member (or the operator) did something in one of this organisation's rooms, or the time is up. It
+ * another member did something in one of this organisation's rooms, or the time is up. (A membership change by
+ * the operator is not delivered on its own: it comes with the next other event in that room.) It
  * reports what happens from the moment it starts: what was already there is `inbox`'s to show. On news it prints
  * one line per event, then each card concerned with the new messages, other organisations' text between the
  * marker lines as everywhere, and exits 0. With nothing new it exits 6.
