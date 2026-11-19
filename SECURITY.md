@@ -15,9 +15,10 @@ table yet: fixes go to the main branch.
 ## In scope
 
 - The server in `src/`: the request signature check, enrollment and activation, room and card access rules, the
-  content gate, idempotency, the state file, the operator channel, the listener limits.
+  content gate, idempotency, the state file, the operator channel, the listener limits, the room record
+  (`src/chain.rs`, specified in `partner-pack/CHAIN.md`).
 - The client `partner-pack/p2p.mjs`: key handling, what it sends and where, how it prints text written by another
-  organisation.
+  organisation, and its `verify` command.
 - The web view (`src/app.html`, `src/app.js`, `src/app.css`): key storage in the browser, request signing, how it
   puts board text on the page, what its copy actions place on the clipboard.
 - The signing specification and the reference code in `partner-pack/SIGNING.md`.
@@ -27,7 +28,9 @@ Examples of what counts: reading a room without being a member, acting as anothe
 shared-room member's organisation id or key id, activating a key without typing its fingerprint, a readable HTTP
 request without a valid signature that gets any answer other than the identical 401 (the public pages aside), a
 signature accepted twice outside the restart cases listed below, board text reaching the page as markup, a
-private key sent anywhere by the client or the web view.
+private key sent anywhere by the client or the web view, a room record that names an organisation id or key id
+in a shared room or differs by caller, a change to a card, message or stage at or before a head the client saved
+that `verify` then passes, two different payloads with the same payload record.
 
 ## Out of scope
 
@@ -50,7 +53,14 @@ private key sent anywhere by the client or the web view.
   or the signing scheme.
 - The request signature is a custom scheme (`p2paecn-sig-1`). A move to RFC 9421 HTTP Message Signatures is planned.
 - No rate limits.
-- No tamper-evident audit record. Reads are not recorded at all.
+- The room record detects a change only for a member who saved a head before it, and only from that head on. It
+  does not stop the operator from posting as a member, from enrolling a key for any organisation, or from showing
+  two members different histories unless they compare heads out of band. The head is not signed by the board, so
+  a saved head is the member's own evidence and not a proof a third party must accept. Entries built at an upgrade
+  from an older state file prove nothing about the time before it. Reads and operator actions outside rooms are
+  not recorded at all. The format `p2paecn-chain-1` is custom and unreviewed.
+- The room record gives every member of a room, `fields` keys included, the SHA-256 of each title and text
+  payload. That reveals no text and confirms an exact guess.
 - State is one JSON file, not encrypted. Anyone who obtains a backup of it can read all cards and messages.
 - The operator can read everything on the board, can enroll a key for any organisation and post as it, and can
   change the state file. Nothing is encrypted end to end.

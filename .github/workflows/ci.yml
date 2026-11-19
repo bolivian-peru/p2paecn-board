@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 30
     env:
       CARGO_TERM_COLOR: always
-      # Ports of the local boards the Node tests start.
+      # Ports of the local boards the Node tests start. The client tests also use the port after P2P_TEST_PORT.
       P2P_TEST_PORT: "8821"
       APP_TEST_PORT: "8841"
     steps:

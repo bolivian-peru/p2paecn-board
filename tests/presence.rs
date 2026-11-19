@@ -73,7 +73,7 @@ async fn members_is_you_first_then_the_others_by_display_name() {
     let b = board();
     let w = &b.w;
     let (_, rooms) = w.get(&b.supplier, "/v1/rooms").await;
-    assert_eq!(rooms, json!({ "rooms": [
+    assert_eq!(without_heads(rooms.clone()), json!({ "rooms": [
         { "id": "a-x", "kind": "pair", "you": "supplier-a", "others": ["reseller-x"],
           "members": [member("supplier-a", true, true), member("reseller-x", false, false)] },
         { "id": "a-y", "kind": "pair", "you": "supplier-a", "others": ["reseller-y"],
@@ -325,7 +325,8 @@ async fn without_the_new_fields_every_answer_is_what_it_was() {
     let w = &b.w;
     let reseller = w.active_agent("reseller-x", "text", "agent", 82).await;
 
-    // A room minus `members` is exactly the old object: id, kind, you, others.
+    // A room minus `members` and `chain` (the head of its record, added later) is exactly the old object: id, kind,
+    // you, others.
     let old_rooms = json!([
         { "id": "a-x", "kind": "pair", "you": "reseller-x", "others": ["supplier-a"] },
         { "id": "hub", "kind": "shared", "you": "member-2", "others": ["member-1", "member-3", "member-4"] }
@@ -333,6 +334,7 @@ async fn without_the_new_fields_every_answer_is_what_it_was() {
     let strip = |mut rooms: Value| {
         for room in rooms.as_array_mut().unwrap() {
             assert!(room.as_object_mut().unwrap().remove("members").is_some_and(|m| m.is_array()));
+            assert!(room.as_object_mut().unwrap().remove("chain").is_some_and(|c| c.is_object()));
         }
         rooms
     };

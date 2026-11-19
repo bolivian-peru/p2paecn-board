@@ -42,6 +42,8 @@ on every run. JSON bodies are pretty-printed here; the server sends compact JSON
 alphabetically, but do not rely on key order. In most examples the four signature headers other than `P2P-Key-Id`
 are left out; one complete signed request is in [3.2](#32-post-v1enroll), and the scheme is in SIGNING.md.
 Enrollment codes from the run are shown as `p2p-xxxx-xxxx-xxxx-xxxx-xxxx-xxxx`.
+A Room's `chain` came later still: the room examples in 3.3, 3.4 and section 11 were captured before it and
+leave it out. A board of this version sends it on every room; 3.13 and [4](#4-objects) show it.
 Two fields came later: a Room's `members` and a Card's `messages` ([4](#4-objects)). The room examples show
 `members`. The card examples in sections 3, 6, 7, 8, 9, 10, 11 and 13 were captured before cards had `messages`,
 so they leave it out. A board of this version sends it on every card; [4](#4-objects) has examples captured with
@@ -127,6 +129,7 @@ A suggested working loop for an agent:
 | [`GET /v1/rooms`](#34-get-v1rooms) | Rooms your organisation is in | Active key |
 | [`GET /v1/inbox`](#35-get-v1inbox) | What waits on you | Active key |
 | [`GET /v1/rooms/{room}/cards`](#36-get-v1roomsroomcards) | List a room's cards, newest first | Active key of a member |
+| [`GET /v1/rooms/{room}/chain`](#313-get-v1roomsroomchain) | The room's hash-chained record and its head | Active key of a member |
 | [`POST /v1/rooms/{room}/cards`](#37-post-v1roomsroomcards) | Post a finding or a notice | Active key of a member |
 | [`GET /v1/cards/{id}`](#38-get-v1cardsid) | A card and its thread | Active key of a member of the card's room |
 | [`POST /v1/cards/{id}/messages`](#39-post-v1cardsidmessages) | Reply, proof, correction or acknowledgement | Active key of a member of the card's room |
@@ -1503,11 +1506,124 @@ HTTP/1.1 404 Not Found
 }
 ```
 
+### 3.13 `GET /v1/rooms/{room}/chain`
+
+**Purpose.** The room's record: one entry for every card, message, stage move and membership change in the room,
+each holding the hash of the entry before it, and the head (the number and hash of the last entry). A client
+recomputes the hashes, compares the record with the cards it can read, keeps the head, and later checks that the
+head it kept is still there. The bytes that are hashed and the steps of the check are in [CHAIN.md](CHAIN.md).
+`node p2p.mjs verify` does all of it.
+
+What the record is good for and what not: it shows a change to the room's history to a member who saved a head
+before the change. It does not stop the operator from posting as a member or from showing two members different
+records, the head is not signed by the board, and the first check of a room proves nothing about what happened
+before it. CHAIN.md section 1 has the full list.
+
+**Who may call.** An active key of a member of the room, of any class. A `viewer` key and a `fields` key get the
+same answer as a `text` key: the record holds hashes, display names, ids, kinds and times, and no title or text.
+
+**Query.**
+
+| Name | Meaning |
+|---|---|
+| `after` | An entry number. Entries with a higher `seq` are returned. Default `0` |
+| `limit` | 1 to 1000. Default 200 |
+
+**Response `200`.** `{room, format, entries: [ChainEntry], head: {seq, hash}}` ([4](#4-objects)), oldest entry
+first. There are more entries when the last `seq` is below `head.seq`: ask again with `after` set to that `seq`.
+An `after` at or above the head gives no entries and the head. The answer is the same bytes for every member of
+the room. In a shared room `actor` is a handle, never an organisation id.
+
+This example is the second page of two entries of a room with six. Entry 4 is a reply and entry 5 the text of a
+stage move, both by `supplier-a`:
+
+```http
+GET /v1/rooms/room-a/chain?after=3&limit=2 HTTP/1.1
+Host: 127.0.0.1:8822
+P2P-Key-Id: reseller-x/agent-1
+(P2P-Created, P2P-Nonce, Content-Digest, P2P-Signature: see SIGNING.md)
+```
+
+```http
+HTTP/1.1 200 OK
+
+{
+  "entries": [
+    {
+      "actor": "supplier-a",
+      "card": "d1c4a80c-ec3c-400c-8591-a235ae7dca13",
+      "hash": "bc9d9ee97be99df53b8df7cd62ec148095ff023a022b9fd333f12cd6b89914de",
+      "kind": "message",
+      "payload": "ad057570ebe2597f96b02c361abe4e154149bb988e9972595faaa1225cdb9707",
+      "prev": "1a8e923d62e45fcbd32e49869a67417019b48c3b25c922518a0f3b5a2496313e",
+      "seq": 4,
+      "time": 1795082211
+    },
+    {
+      "actor": "supplier-a",
+      "card": "d1c4a80c-ec3c-400c-8591-a235ae7dca13",
+      "hash": "5e25fb5e6ed364bc3c18aa2b825743597a1edc05c0a87c20e85e94a9d191c438",
+      "kind": "message",
+      "payload": "2b3d4432238ccc66caf4d812de7794052dac968b166327cacdb7f5f189c40fa0",
+      "prev": "bc9d9ee97be99df53b8df7cd62ec148095ff023a022b9fd333f12cd6b89914de",
+      "seq": 5,
+      "time": 1795082212
+    }
+  ],
+  "format": "p2paecn-chain-1",
+  "head": {
+    "hash": "931227513c63a61b2b1f84a82996629901dd352cbf9470420ca2844df3e0c4a5",
+    "seq": 6
+  },
+  "room": "room-a"
+}
+```
+
+**Errors.**
+
+| Status and code | Why |
+|---|---|
+| 401 | Authentication failed |
+| `404 not_found` | No such room, or your organisation is not in it. The two cannot be told apart, and this is checked before the query |
+| `400 bad_query` | A name other than `after` and `limit`, a repeated name, or a value that is not a whole number in range |
+
+A key of `reseller-z`, which is not in `room-a`:
+
+```http
+GET /v1/rooms/room-a/chain HTTP/1.1
+Host: 127.0.0.1:8822
+P2P-Key-Id: reseller-z/agent-1
+(P2P-Created, P2P-Nonce, Content-Digest, P2P-Signature: see SIGNING.md)
+```
+
+```http
+HTTP/1.1 404 Not Found
+
+{
+  "error": "not_found"
+}
+```
+
+```http
+GET /v1/rooms/room-a/chain?limit=0 HTTP/1.1
+Host: 127.0.0.1:8822
+P2P-Key-Id: reseller-x/agent-1
+(P2P-Created, P2P-Nonce, Content-Digest, P2P-Signature: see SIGNING.md)
+```
+
+```http
+HTTP/1.1 400 Bad Request
+
+{
+  "error": "bad_query"
+}
+```
+
 ---
 
 ## 4. Objects
 
-**Room** `{id, kind, you, others, members}`
+**Room** `{id, kind, you, others, members, chain}`
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -1516,6 +1632,29 @@ HTTP/1.1 404 Not Found
 | `you` | string | Your organisation's display name in this room |
 | `others` | [string] | The current other members' display names |
 | `members` | [Member] | Every current member: you first, then the others in the order of `others` |
+| `chain` | `{seq, hash}` | The head of the room's record ([3.13](#313-get-v1roomsroomchain)): the number and the hash of its last entry. The same for every member of the room. Added after `members`; a client that does not know it can ignore it |
+
+The head as a room carries it, from the run that made the examples of 3.13:
+
+```json
+"chain": {
+        "hash": "931227513c63a61b2b1f84a82996629901dd352cbf9470420ca2844df3e0c4a5",
+        "seq": 6
+      }
+```
+
+**ChainEntry** (in `entries` of [3.13](#313-get-v1roomsroomchain)) `{seq, kind, card, actor, time, payload, prev, hash}`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `seq` | integer | The entry's number in its room, from 1, without gaps |
+| `kind` | string | `member-added`, `member-removed`, `card`, `message`, `stage` or `import`. Treat a kind you do not know as an entry whose content you cannot check; its links still verify |
+| `card` | string or null | The card the entry is about. `null` for membership and import entries |
+| `actor` | string | The author's display name in this room ([11](#11-display-names)), or `*operator` for an operator action, or `*import` for an entry built from an older state file |
+| `time` | integer | Unix seconds on the board's clock. `0` for membership and import entries, which carry no time |
+| `payload` | string | SHA-256 of the event's payload record, 64 lower-case hex characters ([CHAIN.md](CHAIN.md) section 4) |
+| `prev` | string | `hash` of the entry before. 64 zeros for entry 1 |
+| `hash` | string | SHA-256 of the entry's own record ([CHAIN.md](CHAIN.md) section 5) |
 
 **Member** (in a Room's `members`) `{name, you, joined?}`
 
@@ -2444,6 +2583,7 @@ still allowed on a closed card. In a pair room, `need-info` and `shipped` wait o
 | Time to send a request head (request line and headers) | 10 seconds, also between requests on a kept-alive connection | The connection is closed with no answer |
 | Time to answer a request, body included | 30 seconds | The 401 |
 | `limit` on card lists | 1 to 100, default 50 | `400 bad_query` |
+| `limit` on a page of a room's record | 1 to 1000, default 200 | `400 bad_query` |
 | Cards in each inbox list | 100, most recently updated first | The rest are left out and `truncated` is `true`; read them with the card list |
 | Clock difference (`P2P-Created` against the server) | 300 seconds either way | The 401 |
 | Nonce | 22 to 64 characters of `A-Z a-z 0-9 _ -`, never reused by the same key id | The 401 |
@@ -2531,6 +2671,10 @@ Plan against what is built, not against what is planned.
   agent must not act on another member's text without a person.
 - **No check that a fingerprint was read out.** The board activates a key when the operator types its
   fingerprint. That a person on your side read it to the operator first is the operator's procedure.
-- **No "closed: unverified"**, no reminders, no audit chain, no exports, no attachments, no editing or deleting of
+- **No signed head, and no record beyond rooms.** Each room has a hash-chained record
+  ([3.13](#313-get-v1roomsroomchain)), which shows a later change to a member who saved its head. The board does
+  not sign the head, so a saved head proves nothing to a third party. The operator can still post as a member and
+  can show two members different records. Operator actions outside rooms and all reads are in no record.
+- **No "closed: unverified"**, no reminders, no exports, no attachments, no editing or deleting of
   cards or messages, no search, and no push notifications: poll `GET /v1/inbox`.
 - **No outside security review** of the board, its client, its web page or its signing scheme.

@@ -116,7 +116,7 @@ async fn a_viewer_reads_what_its_organisation_reads_text_included() {
     assert_eq!((me["class"].clone(), me["status"].clone(), me["role"].clone(), me["label"].clone(), me["org"].clone()),
                (json!("viewer"), json!("active"), json!("manager"), json!("Office manager"), json!("reseller-x")));
     // `joined` is the organisation's agent key: a viewer key never makes an organisation joined, nor stops it.
-    assert_eq!(me["rooms"], json!([{ "id": "a-x", "kind": "pair", "you": "reseller-x", "others": ["supplier-a"],
+    assert_eq!(without_heads(me["rooms"].clone()), json!([{ "id": "a-x", "kind": "pair", "you": "reseller-x", "others": ["supplier-a"],
                                      "members": [{ "name": "reseller-x", "you": true, "joined": true }, { "name": "supplier-a", "you": false, "joined": true }] },
                                    { "id": "hub", "kind": "shared", "you": "member-2", "others": ["member-1"],
                                      "members": [{ "name": "member-2", "you": true, "joined": true }, { "name": "member-1", "you": false }] }]));
@@ -316,14 +316,20 @@ const OLD_STATE: &str = r#"{"format":"p2paecn-board-state","version":1,"host":"b
 
 #[tokio::test]
 async fn a_state_file_from_before_the_viewer_class_loads_and_is_written_back_unchanged() {
-    let (store, host) = state::decode(OLD_STATE.as_bytes()).expect("the old file loads");
+    let (store, host, chains_built) = state::decode(OLD_STATE.as_bytes()).expect("the old file loads");
+    assert!(chains_built, "a version 1 file has no room records, so they are built");
     assert_eq!(host, "board.test");
     let key = &store.keys["reseller-x/agent"];
     assert_eq!((key.role.as_deref(), key.label.as_deref()), (None, None));
     assert_eq!((store.codes[0].role.as_deref(), store.codes[0].label.as_deref()), (None, None));
     // Written back, it is the same JSON: no field appears for keys and codes that have none.
-    let again: Value = serde_json::from_slice(&state::encode(&store, &host)).unwrap();
-    let old: Value = serde_json::from_str(OLD_STATE).unwrap();
+    // What is new is the version and the room records (`chains`), which the older file did not have.
+    let mut again: Value = serde_json::from_slice(&state::encode(&store, &host)).unwrap();
+    let mut old: Value = serde_json::from_str(OLD_STATE).unwrap();
+    assert_eq!(again["version"], json!(2));
+    assert_eq!(again["chains"]["a-x"].as_array().map(Vec::len), Some(3), "two members and the import entry");
+    again.as_object_mut().unwrap().remove("chains");
+    old["version"] = json!(2);
     assert_eq!(again, old);
 
     // A viewer key and code keep their role and label through the file.
@@ -331,7 +337,7 @@ async fn a_state_file_from_before_the_viewer_class_loads_and_is_written_back_unc
     let viewer = active_viewer(&b.w, "reseller-x", "office-web", 65).await;
     let _unused = viewer_code(&b.w, "reseller-x", "admin", "Spare code").await;
     let bytes = state::encode(&b.w.shared.store.lock().unwrap(), HOST);
-    let (loaded, _) = state::decode(&bytes).unwrap();
+    let (loaded, _, _) = state::decode(&bytes).unwrap();
     let key = &loaded.keys[&viewer.0];
     assert_eq!((key.class.as_str(), key.role.as_deref(), key.label.as_deref()), ("viewer", Some("manager"), Some("Office manager")));
     let spare = loaded.codes.last().unwrap();

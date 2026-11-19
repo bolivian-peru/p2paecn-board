@@ -9,6 +9,7 @@
 //!
 //! Not written: nonces. See `Shared::not_before` for how replay protection holds across a restart without them.
 
+use crate::chain::{self, Entry};
 use crate::store::{AgentKey, Card, EnrollCode, Message, Replay, Room, Store};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -20,8 +21,12 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 pub const FORMAT: &str = "p2paecn-board-state";
-/// Raised whenever the meaning of a field changes. A file of another version is refused, not guessed at.
-pub const VERSION: u32 = 1;
+/// Raised whenever the meaning of a field changes. A file of a version this server does not know is refused, not
+/// guessed at. Version 2 added `chains`, the hash-chained record of each room (`src/chain.rs`).
+pub const VERSION: u32 = 2;
+/// The version before chains. Such a file is still loaded: the chains are built from its cards and messages
+/// (`chain::import`), in memory, and the file is written as version 2 with the next accepted change.
+pub const VERSION_WITHOUT_CHAINS: u32 = 1;
 
 #[derive(Serialize)]
 struct ReplayOut<'a> {
@@ -53,6 +58,7 @@ struct FileOut<'a> {
     codes: &'a [EnrollCode],
     cards: &'a [Card],
     messages: &'a [Message],
+    chains: &'a BTreeMap<String, Vec<Entry>>,
     replays: Vec<ReplayOut<'a>>,
 }
 
@@ -68,7 +74,6 @@ struct Header {
 struct FileIn {
     #[allow(dead_code)]
     format: String,
-    #[allow(dead_code)]
     version: u32,
     host: String,
     orgs: BTreeSet<String>,
@@ -77,6 +82,8 @@ struct FileIn {
     codes: Vec<EnrollCode>,
     cards: Vec<Card>,
     messages: Vec<Message>,
+    /// Present in version 2, absent in version 1.
+    chains: Option<BTreeMap<String, Vec<Entry>>>,
     replays: Vec<ReplayIn>,
 }
 
@@ -99,6 +106,7 @@ pub fn encode(store: &Store, host: &str) -> Vec<u8> {
         codes: &store.codes,
         cards: &store.cards,
         messages: &store.messages,
+        chains: &store.chains,
         replays,
     };
     let mut bytes = serde_json::to_vec(&file).expect("the store always serialises");
@@ -106,14 +114,17 @@ pub fn encode(store: &Store, host: &str) -> Vec<u8> {
     bytes
 }
 
-/// The store and the host string saved with it.
-pub fn decode(bytes: &[u8]) -> Result<(Store, String), String> {
+/// The store, the host string saved with it, and whether the chains were built here because the file is of the
+/// version before them. A version 2 file must hold a chain for each of its rooms and for nothing else, and every
+/// chain must link: each entry numbered in order, naming the hash of the one before, with its own hash right. That
+/// catches a damaged file. It does not catch a deliberate change, which can recompute the hashes.
+pub fn decode(bytes: &[u8]) -> Result<(Store, String, bool), String> {
     let header: Header = serde_json::from_slice(bytes).map_err(|e| format!("not a state file: {e}"))?;
     if header.format.as_deref() != Some(FORMAT) {
         return Err(format!("not a state file: format is not \"{FORMAT}\""));
     }
-    if header.version != Some(VERSION) {
-        return Err(format!("version {:?}, this server reads version {VERSION} only", header.version));
+    if header.version != Some(VERSION) && header.version != Some(VERSION_WITHOUT_CHAINS) {
+        return Err(format!("version {:?}, this server reads versions {VERSION_WITHOUT_CHAINS} and {VERSION} only", header.version));
     }
     let file: FileIn = serde_json::from_slice(bytes).map_err(|e| format!("damaged: {e}"))?;
     let mut store = Store::default();
@@ -133,12 +144,30 @@ pub fn decode(bytes: &[u8]) -> Result<(Store, String), String> {
         }
     }
     store.replays = replays;
-    Ok((store, file.host))
+    let chains_built = match (file.version, file.chains) {
+        (VERSION_WITHOUT_CHAINS, None) => {
+            store.chains = chain::import(&store.rooms, &store.cards, &store.messages);
+            true
+        }
+        (VERSION_WITHOUT_CHAINS, Some(_)) => return Err("damaged: a version 1 file with chains".into()),
+        (_, None) => return Err("damaged: a version 2 file without chains".into()),
+        (_, Some(chains)) => {
+            if !chains.keys().eq(store.rooms.keys()) {
+                return Err("damaged: the chains are not for exactly the rooms".into());
+            }
+            for (room, entries) in &chains {
+                chain::check(room, entries).map_err(|seq| format!("damaged: the chain of room {room} does not link at entry {seq}"))?;
+            }
+            store.chains = chains;
+            false
+        }
+    };
+    Ok((store, file.host, chains_built))
 }
 
 /// The state file, or `None` when there is none yet. Every other outcome that is not a usable file is an error,
 /// and the caller must not start.
-pub fn load(path: &Path) -> Result<Option<(Store, String)>, String> {
+pub fn load(path: &Path) -> Result<Option<(Store, String, bool)>, String> {
     let meta = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),

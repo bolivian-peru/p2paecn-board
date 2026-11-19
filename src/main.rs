@@ -20,8 +20,14 @@ async fn main() {
         (Source::Memory, _) | (_, None) => "in-memory store: every organisation, room, key and card is lost on restart".to_owned(),
         (source, Some(path)) => {
             let how = match source {
-                Source::Loaded { config_ignored: true } => "loaded from state file, P2PAECN_CONFIG ignored",
-                Source::Loaded { config_ignored: false } => "loaded from state file",
+                Source::Loaded { config_ignored: true, chains_built: false } => "loaded from state file, P2PAECN_CONFIG ignored",
+                Source::Loaded { config_ignored: false, chains_built: false } => "loaded from state file",
+                Source::Loaded { config_ignored: true, chains_built: true } => {
+                    "loaded from a version 1 state file, room records built from it and saved with the next change, P2PAECN_CONFIG ignored"
+                }
+                Source::Loaded { config_ignored: false, chains_built: true } => {
+                    "loaded from a version 1 state file, room records built from it and saved with the next change"
+                }
                 Source::Created { from_config: true } => "new state file, from P2PAECN_CONFIG",
                 _ => "new state file, empty",
             };

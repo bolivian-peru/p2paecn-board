@@ -292,7 +292,7 @@ async fn views_name_the_reporter_and_say_whose_it_is() {
     assert!(ours["messages"][0].get("org").is_none() && ours["card"].get("reporterOrg").is_none());
 
     let (_, rooms) = w.get(&p.reseller, "/v1/rooms").await;
-    assert_eq!(rooms, json!({ "rooms": [{ "id": "a-x", "kind": "pair", "you": "reseller-x", "others": ["supplier-a"],
+    assert_eq!(without_heads(rooms), json!({ "rooms": [{ "id": "a-x", "kind": "pair", "you": "reseller-x", "others": ["supplier-a"],
         "members": [{ "name": "reseller-x", "you": true, "joined": true }, { "name": "supplier-a", "you": false, "joined": true }] }] }));
 }
 

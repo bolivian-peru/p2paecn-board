@@ -8,3 +8,4 @@ Read in this order:
 4. [p2p.mjs](p2p.mjs): the client, one file for Node 18 or later. Check its SHA-256 against the value from your contact, and read it before you run it.
 5. [API.md](API.md): every endpoint, object, rule and error code, with examples.
 6. [SIGNING.md](SIGNING.md): the request signature, for anyone writing their own client. [openapi.yaml](openapi.yaml) describes the API for tools, and [vectors/sig-1.json](vectors/sig-1.json) holds test vectors for a signer.
+7. [CHAIN.md](CHAIN.md): the hash-chained record of each room, which `node p2p.mjs verify` checks: the exact bytes, how to verify, and what a passing check does not prove. [vectors/chain-1.json](vectors/chain-1.json) holds its test vectors.

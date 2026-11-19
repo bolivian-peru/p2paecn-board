@@ -1,9 +1,11 @@
-//! Record of organisations, rooms, keys, enrollment codes, cards and messages, held in process memory.
+//! Record of organisations, rooms, keys, enrollment codes, cards, messages and each room's hash-chained record
+//! (`src/chain.rs`), held in process memory.
 //! Without `P2PAECN_STATE` a restart forgets all of it. With it, every accepted change is written to one file
 //! before it is acknowledged (`src/state.rs`), and the file is loaded at start. Nonces are never written.
 //! There is no database. What a view derives from the record
 //! (a thread's length, which organisations have an agent key) is computed when asked and never stored.
 
+use crate::chain::{self, Entry};
 use crate::KeyClass;
 use axum::http::StatusCode;
 use ed25519_dalek::VerifyingKey;
@@ -216,6 +218,9 @@ pub struct Store {
     pub codes: Vec<EnrollCode>,
     pub cards: Vec<Card>,
     pub messages: Vec<Message>,
+    /// Room id -> that room's chain (`src/chain.rs`): one entry per accepted event, appended in the same change
+    /// as the event itself and saved with it.
+    pub chains: BTreeMap<String, Vec<Entry>>,
     /// (key id, idempotency key) -> first result
     pub replays: HashMap<(String, String), Replay>,
     /// (key id, nonce) -> expiry, unix seconds
@@ -237,6 +242,7 @@ impl Store {
             codes: self.codes.clone(),
             cards: self.cards.clone(),
             messages: self.messages.clone(),
+            chains: self.chains.clone(),
             replays: self.replays.clone(),
             nonces: HashMap::new(),
             nonces_purged: 0,
@@ -272,6 +278,35 @@ impl Store {
 
     pub fn card_mut(&mut self, id: Uuid) -> Option<&mut Card> {
         self.cards.iter_mut().find(|c| c.id == id)
+    }
+
+    /// Seq and hash of the last entry of a room's chain.
+    pub fn chain_head(&self, room: &str) -> (u64, &str) {
+        chain::head(self.chains.get(room).map_or(&[], Vec::as_slice))
+    }
+
+    /// Appends the `card` entry for a card that was just stored together with its report message.
+    pub fn chain_card(&mut self, card: Uuid) {
+        let Some(card) = self.cards.iter().rev().find(|c| c.id == card) else { return };
+        let Some(room) = self.rooms.get(&card.room) else { return };
+        let report = self.messages.iter().rev().find(|m| m.card == card.id && m.kind == "report");
+        chain::card_created(self.chains.entry(room.id.clone()).or_default(), room, card, report);
+    }
+
+    /// Appends the `message` entry for a message that was just stored.
+    pub fn chain_message(&mut self, message: Uuid) {
+        let Some(message) = self.messages.iter().rev().find(|m| m.id == message) else { return };
+        let Some(card) = self.cards.iter().find(|c| c.id == message.card) else { return };
+        let Some(room) = self.rooms.get(&card.room) else { return };
+        chain::message_posted(self.chains.entry(room.id.clone()).or_default(), room, message);
+    }
+
+    /// Appends the `stage` entry for a card whose stage was just set. `org` is the organisation that moved it,
+    /// entered under the name the room shows for it.
+    pub fn chain_stage(&mut self, card: Uuid, org: &str, now: u64) {
+        let Some(card) = self.cards.iter().find(|c| c.id == card) else { return };
+        let Some(room) = self.rooms.get(&card.room) else { return };
+        chain::stage_set(self.chains.entry(room.id.clone()).or_default(), room, card, room.display_name(org), now);
     }
 
     /// How many messages a card's thread holds: the report, every reply, proof, correction and ack, and one
@@ -340,18 +375,24 @@ impl Store {
             }
             room.members.push(Member { org: org.clone(), handle, removed: false });
         }
+        // The room's chain starts with its members. Nothing above can refuse any more.
+        let mut entries = Vec::new();
+        for m in &room.members {
+            chain::member_added(&mut entries, &room, &m.org, chain::OPERATOR);
+        }
+        self.chains.insert(id.to_owned(), entries);
         self.rooms.insert(id.to_owned(), room);
         Ok(())
     }
 
     /// Adds an org to a shared room. A removed member comes back only under its old handle, which its past cards
     /// still show: another handle would rename its history and free the old one for another org.
-    pub fn add_member(&mut self, room: &str, org: &str, handle: &str) -> Result<(), Refusal> {
+    pub fn add_member(&mut self, room_id: &str, org: &str, handle: &str) -> Result<(), Refusal> {
         let handle = self.check_handle(Some(handle))?;
         if !self.orgs.contains(org) {
             return Err((UNPROCESSABLE, "unknown_org"));
         }
-        let room = self.rooms.get_mut(room).ok_or(NOT_FOUND)?;
+        let room = self.rooms.get_mut(room_id).ok_or(NOT_FOUND)?;
         if room.kind != RoomKind::Shared {
             return Err((UNPROCESSABLE, "not_a_shared_room"));
         }
@@ -367,11 +408,13 @@ impl Store {
             Some(former) => former.removed = false,
             None => room.members.push(Member { org: org.to_owned(), handle: Some(handle), removed: false }),
         }
+        chain::member_added(self.chains.entry(room_id.to_owned()).or_default(), room, org, chain::OPERATOR);
         Ok(())
     }
 
     /// Removes an org from a shared room. Its past cards and messages stay, under its handle. Its open findings
-    /// there are closed as withdrawn: it can no longer close them, and in a shared room nobody else may.
+    /// there are closed as withdrawn: it can no longer close them, and in a shared room nobody else may. The chain
+    /// gets one `member-removed` entry and then one `stage` entry for each finding closed this way.
     pub fn remove_member(&mut self, room_id: &str, org: &str, now: u64) -> Result<(), Refusal> {
         let room = self.rooms.get_mut(room_id).ok_or(NOT_FOUND)?;
         if room.kind != RoomKind::Shared {
@@ -379,11 +422,15 @@ impl Store {
         }
         let member = room.members.iter_mut().find(|m| m.org == org && !m.removed).ok_or(NOT_FOUND)?;
         member.removed = true;
+        let room = &*room;
+        let entries = self.chains.entry(room_id.to_owned()).or_default();
+        chain::member_removed(entries, room, org, chain::OPERATOR);
         let open = |c: &&mut Card| c.room == room_id && c.reporter_org == org && c.kind == "finding" && c.stage != "closed";
         for card in self.cards.iter_mut().filter(open) {
             card.stage = "closed".to_owned();
             card.outcome = Some("withdrawn".to_owned());
             card.updated = now;
+            chain::stage_set(entries, room, card, chain::OPERATOR, now);
         }
         Ok(())
     }

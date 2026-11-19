@@ -17,7 +17,7 @@ cargo build
 
 ```bash
 cargo test
-node --test client-test/      # starts target/debug/p2paecn-board on port $P2P_TEST_PORT (8821 if unset)
+node --test client-test/      # starts target/debug/p2paecn-board on port $P2P_TEST_PORT (8821 if unset) and the next one
 node --test app-test/         # the same binary on port $APP_TEST_PORT (8841 if unset)
 ```
 
@@ -65,6 +65,20 @@ cp tests/vectors/sig-1.json partner-pack/vectors/sig-1.json
 ```
 
 The script is deterministic. `tests/sig_vectors.rs` compares the two copies byte for byte.
+
+## Room record vectors
+
+```bash
+node tools/gen-chain-vectors.mjs > tests/vectors/chain-1.json
+cp tests/vectors/chain-1.json partner-pack/vectors/chain-1.json
+```
+
+The script is deterministic and uses the hashing in `partner-pack/p2p.mjs`. `tests/chain_vectors.rs` builds the same
+records with `src/chain.rs` and compares bytes and hashes, and a test in `client-test/verify.test.mjs` runs the
+script again and compares its output with both copies. The format is specified in `partner-pack/CHAIN.md`. The
+server's code and the client's code are each written against that document, not against each other: a change to
+the format is made in the document first, then in both, and it needs a new version label, because members keep
+heads computed under the old one.
 
 ## Pull requests
 

@@ -15,10 +15,12 @@
 //! - members of a room see which of its members have an agent key that can act now (`joined`), nothing more
 //!   about each other's keys;
 //! - a `fields` key never receives text written by another organisation;
-//! - every write passes the content gate and carries an idempotency key.
+//! - every write passes the content gate and carries an idempotency key;
+//! - every accepted card, message and stage move appends to its room's chain (`src/chain.rs`) in the same change,
+//!   after the last check that can refuse it. A replayed write returns before it and appends nothing.
 
 use crate::store::{AgentKey, Card, Enrolled, KeyStatus, Message, Refusal, Replay, RoomKind, Store, NOT_FOUND};
-use crate::{gate, operator, sig, store, KeyClass, Shared};
+use crate::{chain, gate, operator, sig, store, KeyClass, Shared};
 use axum::body::Bytes;
 use axum::extract::rejection::{BytesRejection, PathRejection};
 use axum::extract::{DefaultBodyLimit, Path, Request, State};
@@ -73,6 +75,7 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/rooms", any(closed).get(rooms).head(closed))
         .route("/v1/inbox", any(closed).get(inbox).head(closed))
         .route("/v1/rooms/{room}/cards", any(closed).get(list_cards).head(closed).post(create_card))
+        .route("/v1/rooms/{room}/chain", any(closed).get(room_chain).head(closed))
         .route("/v1/cards/{id}", any(closed).get(get_card).head(closed))
         .route("/v1/cards/{id}/messages", any(closed).post(post_message))
         .route("/v1/cards/{id}/stage", any(closed).post(set_stage))
@@ -390,9 +393,16 @@ fn room_views(store: &Store, agent: &Agent) -> Vec<Value> {
                     }
                 })
                 .collect();
-            json!({ "id": r.id, "kind": r.kind.as_str(), "you": r.display_name(&agent.org), "others": r.others(&agent.org), "members": members })
+            json!({ "id": r.id, "kind": r.kind.as_str(), "you": r.display_name(&agent.org), "others": r.others(&agent.org), "members": members,
+                    "chain": head_view(store, &r.id) })
         })
         .collect()
+}
+
+/// The head of a room's chain: the same for every member of the room.
+pub(crate) fn head_view(store: &Store, room: &str) -> Value {
+    let (seq, hash) = store.chain_head(room);
+    json!({ "seq": seq, "hash": hash })
 }
 
 fn key_view(key_id: &str, k: &AgentKey) -> Value {
@@ -666,6 +676,50 @@ async fn list_cards(State(s): App, room: Param, method: Method, uri: Uri, header
     reply(StatusCode::OK, out)
 }
 
+/// A page of a room's chain holds at most this many entries.
+pub const CHAIN_PAGE_MAX: usize = 1000;
+const CHAIN_PAGE_DEFAULT: usize = 200;
+
+/// `after` (a seq; entries above it are returned, default 0) and `limit` (1 to `CHAIN_PAGE_MAX`, default 200).
+/// Anything else, a repeated name or a bad value is `400 bad_query`.
+fn chain_query(query: Option<&str>) -> Result<(u64, usize), Refusal> {
+    let bad = (StatusCode::BAD_REQUEST, "bad_query");
+    let (mut after, mut limit) = (0, CHAIN_PAGE_DEFAULT);
+    let mut seen = BTreeSet::new();
+    for pair in query.unwrap_or("").split('&').filter(|p| !p.is_empty()) {
+        let (name, value) = pair.split_once('=').ok_or(bad)?;
+        if !seen.insert(name) || value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(bad);
+        }
+        match name {
+            "after" => after = value.parse().map_err(|_| bad)?,
+            "limit" => limit = value.parse().ok().filter(|n| (1..=CHAIN_PAGE_MAX).contains(n)).ok_or(bad)?,
+            _ => return Err(bad),
+        }
+    }
+    Ok((after, limit))
+}
+
+/// The room's chain, oldest first, and its head. The answer does not depend on who asks: every member of the room
+/// and every key class gets the same bytes. It holds hashes, display names, card ids, kinds and times, and no
+/// title or text, so a `fields` key may read it. A room the caller is not in answers like one that does not exist.
+async fn room_chain(State(s): App, room: Param, method: Method, uri: Uri, headers: HeaderMap, body: Body) -> Response {
+    let (agent, _) = authenticated!(s, method, uri, headers, body);
+    let store = s.store.lock().unwrap();
+    let Some(Path(room)) = room.ok().filter(|Path(r)| in_room(&store, &agent, r)) else {
+        return refuse(NOT_FOUND);
+    };
+    let (after, limit) = match chain_query(uri.query()) {
+        Ok(q) => q,
+        Err(r) => return refuse(r),
+    };
+    let entries = store.chains.get(&room).map_or(&[][..], Vec::as_slice);
+    // Entry n is at index n - 1, so `after` is also where the page starts.
+    let start = usize::try_from(after).unwrap_or(usize::MAX).min(entries.len());
+    let page = &entries[start..entries.len().min(start.saturating_add(limit))];
+    reply(StatusCode::OK, json!({ "room": room, "format": chain::FORMAT, "entries": page, "head": head_view(&store, &room) }))
+}
+
 async fn get_card(State(s): App, id: Param, method: Method, uri: Uri, headers: HeaderMap, body: Body) -> Response {
     let (agent, _) = authenticated!(s, method, uri, headers, body);
     let store = s.store.lock().unwrap();
@@ -811,6 +865,7 @@ async fn create_card(State(s): App, room: Param, method: Method, uri: Uri, heade
         let id = card.id;
         append(store, id, &agent, "report", text, None, now);
         store.cards.push(card);
+        store.chain_card(id);
         // Viewed as stored, so its thread already holds the report.
         let card = store.card(id).ok_or(NOT_FOUND)?;
         Ok((StatusCode::CREATED, json!({ "card": card_view(store, card, &agent, store.thread_length(id)) })))
@@ -847,6 +902,7 @@ async fn post_message(State(s): App, id: Param, method: Method, uri: Uri, header
             _ => None,
         };
         let message_id = append(store, card_id, &agent, kind, text, replaces, now);
+        store.chain_message(message_id);
         if let Some(card) = store.card_mut(card_id) {
             card.updated = now;
         }
@@ -901,11 +957,14 @@ async fn set_stage(State(s): App, id: Param, method: Method, uri: Uri, headers: 
             _ => {}
         }
         // "closed: unverified" is for a person, after a reminder went unanswered. People sign in read-only, so not yet.
-        append(store, card_id, &agent, "stage", text, None, now);
+        // Two chain entries: the move's text as a message, then the stage it set.
+        let message_id = append(store, card_id, &agent, "stage", text, None, now);
+        store.chain_message(message_id);
         let card = store.card_mut(card_id).ok_or(NOT_FOUND)?;
         card.stage = stage.to_owned();
         card.outcome = outcome.map(str::to_owned);
         card.updated = now;
+        store.chain_stage(card_id, &agent.org, now);
         let card = store.card(card_id).ok_or(NOT_FOUND)?;
         Ok((StatusCode::OK, json!({ "card": card_view(store, card, &agent, store.thread_length(card_id)) })))
     })

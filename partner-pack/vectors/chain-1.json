@@ -1,0 +1,456 @@
+{
+  "format": "p2paecn-chain-1",
+  "genesis": "0000000000000000000000000000000000000000000000000000000000000000",
+  "rooms": [
+    {
+      "room": "a-x",
+      "kind": "pair",
+      "note": "A pair room: actors are organisation ids. Twelve entries, so seq reaches two digits.",
+      "entries": [
+        {
+          "values": {
+            "name": "supplier-a"
+          },
+          "payloadRecord": "p2paecn-chain-1 payload member-added\nname:10:supplier-a\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:a-x\nseq:1:1\nkind:12:member-added\ncard:0:\nactor:9:*operator\ntime:1:0\npayload:64:228c21c45b793d08c986ec7e29991597867ee4f7ae33ea3175bf014bce43d746\nprev:64:0000000000000000000000000000000000000000000000000000000000000000\n",
+          "entry": {
+            "seq": 1,
+            "kind": "member-added",
+            "card": null,
+            "actor": "*operator",
+            "time": 0,
+            "payload": "228c21c45b793d08c986ec7e29991597867ee4f7ae33ea3175bf014bce43d746",
+            "prev": "0000000000000000000000000000000000000000000000000000000000000000",
+            "hash": "bb143d2d5b11f5fd0042392c19efe6b25417dfd98cf18d20373b715a1f127d97"
+          }
+        },
+        {
+          "values": {
+            "name": "reseller-x"
+          },
+          "payloadRecord": "p2paecn-chain-1 payload member-added\nname:10:reseller-x\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:a-x\nseq:1:2\nkind:12:member-added\ncard:0:\nactor:9:*operator\ntime:1:0\npayload:64:ea4f299a840bdb5908e3a33328bf725c62d81747dac434e77364c734d517cf4d\nprev:64:bb143d2d5b11f5fd0042392c19efe6b25417dfd98cf18d20373b715a1f127d97\n",
+          "entry": {
+            "seq": 2,
+            "kind": "member-added",
+            "card": null,
+            "actor": "*operator",
+            "time": 0,
+            "payload": "ea4f299a840bdb5908e3a33328bf725c62d81747dac434e77364c734d517cf4d",
+            "prev": "bb143d2d5b11f5fd0042392c19efe6b25417dfd98cf18d20373b715a1f127d97",
+            "hash": "de339a731b617d05162bf972ae6dcf35fde93c822777009d39a1b659cc0a3a85"
+          }
+        },
+        {
+          "values": {
+            "kind": "finding",
+            "severity": "wrong",
+            "title": "List endpoint skips one item when paging",
+            "message": "7d3a9f40-0000-4000-8000-000000000001",
+            "text": "Page two starts at item 22.\nItem 21 is never returned."
+          },
+          "payloadRecord": "p2paecn-chain-1 payload card\nkind:7:finding\nseverity:5:wrong\ntitle:40:List endpoint skips one item when paging\nmessage:36:7d3a9f40-0000-4000-8000-000000000001\ntext:54:Page two starts at item 22.\nItem 21 is never returned.\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:a-x\nseq:1:3\nkind:4:card\ncard:36:0b6f2c1e-0000-4000-8000-000000000001\nactor:10:reseller-x\ntime:10:1794850000\npayload:64:04fea823155fe0fe3f6a909021518e92931096b9ee2099bdb0878496c7eb488c\nprev:64:de339a731b617d05162bf972ae6dcf35fde93c822777009d39a1b659cc0a3a85\n",
+          "entry": {
+            "seq": 3,
+            "kind": "card",
+            "card": "0b6f2c1e-0000-4000-8000-000000000001",
+            "actor": "reseller-x",
+            "time": 1794850000,
+            "payload": "04fea823155fe0fe3f6a909021518e92931096b9ee2099bdb0878496c7eb488c",
+            "prev": "de339a731b617d05162bf972ae6dcf35fde93c822777009d39a1b659cc0a3a85",
+            "hash": "4ab15b30c25b6f2b3f5dfbd8c8f98085ba239ff166e2599f01cb6f5efa55d387"
+          }
+        },
+        {
+          "values": {
+            "id": "7d3a9f40-0000-4000-8000-000000000002",
+            "kind": "reply",
+            "replaces": null,
+            "text": "Looking at it."
+          },
+          "payloadRecord": "p2paecn-chain-1 payload message\nid:36:7d3a9f40-0000-4000-8000-000000000002\nkind:5:reply\nreplaces:0:\ntext:14:Looking at it.\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:a-x\nseq:1:4\nkind:7:message\ncard:36:0b6f2c1e-0000-4000-8000-000000000001\nactor:10:supplier-a\ntime:10:1794850060\npayload:64:260dcb683763ba320870464a92759a0334e3725018896206615513fb402aae33\nprev:64:4ab15b30c25b6f2b3f5dfbd8c8f98085ba239ff166e2599f01cb6f5efa55d387\n",
+          "entry": {
+            "seq": 4,
+            "kind": "message",
+            "card": "0b6f2c1e-0000-4000-8000-000000000001",
+            "actor": "supplier-a",
+            "time": 1794850060,
+            "payload": "260dcb683763ba320870464a92759a0334e3725018896206615513fb402aae33",
+            "prev": "4ab15b30c25b6f2b3f5dfbd8c8f98085ba239ff166e2599f01cb6f5efa55d387",
+            "hash": "143b198009051cbb7bdf15aa914d75b5d2e733d19d95da9ef31cf243765cfb88"
+          }
+        },
+        {
+          "values": {
+            "id": "7d3a9f40-0000-4000-8000-000000000003",
+            "kind": "correction",
+            "replaces": "7d3a9f40-0000-4000-8000-000000000002",
+            "text": "Reproduced: the second page starts one item late. Ünïcode ok 😀"
+          },
+          "payloadRecord": "p2paecn-chain-1 payload message\nid:36:7d3a9f40-0000-4000-8000-000000000003\nkind:10:correction\nreplaces:36:7d3a9f40-0000-4000-8000-000000000002\ntext:67:Reproduced: the second page starts one item late. Ünïcode ok 😀\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:a-x\nseq:1:5\nkind:7:message\ncard:36:0b6f2c1e-0000-4000-8000-000000000001\nactor:10:supplier-a\ntime:10:1794850090\npayload:64:18fdddb16a57cf1e0419925614e7ac29e5715fd9b9dce4774047e964229f13d5\nprev:64:143b198009051cbb7bdf15aa914d75b5d2e733d19d95da9ef31cf243765cfb88\n",
+          "entry": {
+            "seq": 5,
+            "kind": "message",
+            "card": "0b6f2c1e-0000-4000-8000-000000000001",
+            "actor": "supplier-a",
+            "time": 1794850090,
+            "payload": "18fdddb16a57cf1e0419925614e7ac29e5715fd9b9dce4774047e964229f13d5",
+            "prev": "143b198009051cbb7bdf15aa914d75b5d2e733d19d95da9ef31cf243765cfb88",
+            "hash": "f2933de3698f5f513653c6758899d7f452101f9f49b0f38fb6d52a554d0b5083"
+          }
+        },
+        {
+          "values": {
+            "id": "7d3a9f40-0000-4000-8000-000000000004",
+            "kind": "stage",
+            "replaces": null,
+            "text": "Confirmed here too."
+          },
+          "payloadRecord": "p2paecn-chain-1 payload message\nid:36:7d3a9f40-0000-4000-8000-000000000004\nkind:5:stage\nreplaces:0:\ntext:19:Confirmed here too.\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:a-x\nseq:1:6\nkind:7:message\ncard:36:0b6f2c1e-0000-4000-8000-000000000001\nactor:10:supplier-a\ntime:10:1794850120\npayload:64:0bde81dc8f24e1bc1ec7b2c88f500aa8a0190b3c8398528b06b3f6a87eed818c\nprev:64:f2933de3698f5f513653c6758899d7f452101f9f49b0f38fb6d52a554d0b5083\n",
+          "entry": {
+            "seq": 6,
+            "kind": "message",
+            "card": "0b6f2c1e-0000-4000-8000-000000000001",
+            "actor": "supplier-a",
+            "time": 1794850120,
+            "payload": "0bde81dc8f24e1bc1ec7b2c88f500aa8a0190b3c8398528b06b3f6a87eed818c",
+            "prev": "f2933de3698f5f513653c6758899d7f452101f9f49b0f38fb6d52a554d0b5083",
+            "hash": "6bd6a65b2dd8a3f49862d5e0204835efe9cd43f12469e23cadfd08157ca7becc"
+          }
+        },
+        {
+          "values": {
+            "stage": "acknowledged",
+            "outcome": null
+          },
+          "payloadRecord": "p2paecn-chain-1 payload stage\nstage:12:acknowledged\noutcome:0:\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:a-x\nseq:1:7\nkind:5:stage\ncard:36:0b6f2c1e-0000-4000-8000-000000000001\nactor:10:supplier-a\ntime:10:1794850120\npayload:64:70b7d55107feac3fefb6bb1a07447a7ae285fc53cab96d0f616f27dcbe5abf06\nprev:64:6bd6a65b2dd8a3f49862d5e0204835efe9cd43f12469e23cadfd08157ca7becc\n",
+          "entry": {
+            "seq": 7,
+            "kind": "stage",
+            "card": "0b6f2c1e-0000-4000-8000-000000000001",
+            "actor": "supplier-a",
+            "time": 1794850120,
+            "payload": "70b7d55107feac3fefb6bb1a07447a7ae285fc53cab96d0f616f27dcbe5abf06",
+            "prev": "6bd6a65b2dd8a3f49862d5e0204835efe9cd43f12469e23cadfd08157ca7becc",
+            "hash": "7eeef1c36a568283ba33fb886f5597df558f5e71bf45e433d7ee3da64d2dfe97"
+          }
+        },
+        {
+          "values": {
+            "id": "7d3a9f40-0000-4000-8000-000000000005",
+            "kind": "stage",
+            "replaces": null,
+            "text": "Fixed in the next build."
+          },
+          "payloadRecord": "p2paecn-chain-1 payload message\nid:36:7d3a9f40-0000-4000-8000-000000000005\nkind:5:stage\nreplaces:0:\ntext:24:Fixed in the next build.\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:a-x\nseq:1:8\nkind:7:message\ncard:36:0b6f2c1e-0000-4000-8000-000000000001\nactor:10:supplier-a\ntime:10:1794853600\npayload:64:a61eeaf0e9e22f3fe7caf04f94df020baa65cbe47e4dba5e6136a0bcc89bc7e5\nprev:64:7eeef1c36a568283ba33fb886f5597df558f5e71bf45e433d7ee3da64d2dfe97\n",
+          "entry": {
+            "seq": 8,
+            "kind": "message",
+            "card": "0b6f2c1e-0000-4000-8000-000000000001",
+            "actor": "supplier-a",
+            "time": 1794853600,
+            "payload": "a61eeaf0e9e22f3fe7caf04f94df020baa65cbe47e4dba5e6136a0bcc89bc7e5",
+            "prev": "7eeef1c36a568283ba33fb886f5597df558f5e71bf45e433d7ee3da64d2dfe97",
+            "hash": "e0ad7bd22c1181821ef40fc67cea77b4a2056de036753c75a8b85fd24ea129d0"
+          }
+        },
+        {
+          "values": {
+            "stage": "shipped",
+            "outcome": null
+          },
+          "payloadRecord": "p2paecn-chain-1 payload stage\nstage:7:shipped\noutcome:0:\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:a-x\nseq:1:9\nkind:5:stage\ncard:36:0b6f2c1e-0000-4000-8000-000000000001\nactor:10:supplier-a\ntime:10:1794853600\npayload:64:6b8916580db2ce26bcdb741f6b6f7701640bef0cfee23a23898859c099f2cb53\nprev:64:e0ad7bd22c1181821ef40fc67cea77b4a2056de036753c75a8b85fd24ea129d0\n",
+          "entry": {
+            "seq": 9,
+            "kind": "stage",
+            "card": "0b6f2c1e-0000-4000-8000-000000000001",
+            "actor": "supplier-a",
+            "time": 1794853600,
+            "payload": "6b8916580db2ce26bcdb741f6b6f7701640bef0cfee23a23898859c099f2cb53",
+            "prev": "e0ad7bd22c1181821ef40fc67cea77b4a2056de036753c75a8b85fd24ea129d0",
+            "hash": "5d978221603155f0ce88a237c21163132964bb5f0f9485cbbbf8f54055b13d6b"
+          }
+        },
+        {
+          "values": {
+            "id": "7d3a9f40-0000-4000-8000-000000000006",
+            "kind": "stage",
+            "replaces": null,
+            "text": "Works."
+          },
+          "payloadRecord": "p2paecn-chain-1 payload message\nid:36:7d3a9f40-0000-4000-8000-000000000006\nkind:5:stage\nreplaces:0:\ntext:6:Works.\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:a-x\nseq:2:10\nkind:7:message\ncard:36:0b6f2c1e-0000-4000-8000-000000000001\nactor:10:reseller-x\ntime:10:1794857200\npayload:64:44581fe4073e0b752fdd577ad36cbdf0f7a73de72cfb34e853df29417e92ce14\nprev:64:5d978221603155f0ce88a237c21163132964bb5f0f9485cbbbf8f54055b13d6b\n",
+          "entry": {
+            "seq": 10,
+            "kind": "message",
+            "card": "0b6f2c1e-0000-4000-8000-000000000001",
+            "actor": "reseller-x",
+            "time": 1794857200,
+            "payload": "44581fe4073e0b752fdd577ad36cbdf0f7a73de72cfb34e853df29417e92ce14",
+            "prev": "5d978221603155f0ce88a237c21163132964bb5f0f9485cbbbf8f54055b13d6b",
+            "hash": "da49d47c82a55a5a51670eb3528f89d59230ae804e34c0b7c130aa23f85e5bb9"
+          }
+        },
+        {
+          "values": {
+            "stage": "closed",
+            "outcome": "verified"
+          },
+          "payloadRecord": "p2paecn-chain-1 payload stage\nstage:6:closed\noutcome:8:verified\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:a-x\nseq:2:11\nkind:5:stage\ncard:36:0b6f2c1e-0000-4000-8000-000000000001\nactor:10:reseller-x\ntime:10:1794857200\npayload:64:dc92aa767ed9b724771c9197b494b3231f51b90aca2f1b808bff435226ca3197\nprev:64:da49d47c82a55a5a51670eb3528f89d59230ae804e34c0b7c130aa23f85e5bb9\n",
+          "entry": {
+            "seq": 11,
+            "kind": "stage",
+            "card": "0b6f2c1e-0000-4000-8000-000000000001",
+            "actor": "reseller-x",
+            "time": 1794857200,
+            "payload": "dc92aa767ed9b724771c9197b494b3231f51b90aca2f1b808bff435226ca3197",
+            "prev": "da49d47c82a55a5a51670eb3528f89d59230ae804e34c0b7c130aa23f85e5bb9",
+            "hash": "6939a6ba3af202c2861b512d562efd5b147da300b4dbbb6bfffe08a9ecde3a47"
+          }
+        },
+        {
+          "values": {
+            "kind": "notice",
+            "severity": null,
+            "title": "Größe der Seite ändert sich: 页面大小 📄",
+            "message": "7d3a9f40-0000-4000-8000-000000000007",
+            "text": "A text may look like a record.\ntext:3:abc\nkind:7:finding\n: and end with a colon:"
+          },
+          "payloadRecord": "p2paecn-chain-1 payload card\nkind:6:notice\nseverity:0:\ntitle:49:Größe der Seite ändert sich: 页面大小 📄\nmessage:36:7d3a9f40-0000-4000-8000-000000000007\ntext:80:A text may look like a record.\ntext:3:abc\nkind:7:finding\n: and end with a colon:\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:a-x\nseq:2:12\nkind:4:card\ncard:36:0b6f2c1e-0000-4000-8000-000000000002\nactor:10:supplier-a\ntime:10:1794857300\npayload:64:9d95ca5da14c0a0659f2e0b1c917173993a00f5d81a5d36d96dfe0ae74952b12\nprev:64:6939a6ba3af202c2861b512d562efd5b147da300b4dbbb6bfffe08a9ecde3a47\n",
+          "entry": {
+            "seq": 12,
+            "kind": "card",
+            "card": "0b6f2c1e-0000-4000-8000-000000000002",
+            "actor": "supplier-a",
+            "time": 1794857300,
+            "payload": "9d95ca5da14c0a0659f2e0b1c917173993a00f5d81a5d36d96dfe0ae74952b12",
+            "prev": "6939a6ba3af202c2861b512d562efd5b147da300b4dbbb6bfffe08a9ecde3a47",
+            "hash": "09f0760b84bfb0092426b4103ce7fc9520a8493f9d0e5a4b2c5b2d14aa885b64"
+          }
+        }
+      ],
+      "head": {
+        "seq": 12,
+        "hash": "09f0760b84bfb0092426b4103ce7fc9520a8493f9d0e5a4b2c5b2d14aa885b64"
+      }
+    },
+    {
+      "room": "hub",
+      "kind": "shared",
+      "note": "A shared room built from an older state file: actors are handles, the built entries have the actor *import, and an import entry closes them. Two entries made after the upgrade follow.",
+      "entries": [
+        {
+          "values": {
+            "name": "member-1"
+          },
+          "payloadRecord": "p2paecn-chain-1 payload member-added\nname:8:member-1\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:hub\nseq:1:1\nkind:12:member-added\ncard:0:\nactor:7:*import\ntime:1:0\npayload:64:422e0246da8ed4a2b957692fc71feb1c4fd293d0c46378f82e25a7b4ce1ca089\nprev:64:0000000000000000000000000000000000000000000000000000000000000000\n",
+          "entry": {
+            "seq": 1,
+            "kind": "member-added",
+            "card": null,
+            "actor": "*import",
+            "time": 0,
+            "payload": "422e0246da8ed4a2b957692fc71feb1c4fd293d0c46378f82e25a7b4ce1ca089",
+            "prev": "0000000000000000000000000000000000000000000000000000000000000000",
+            "hash": "fbdbb5ea3ad83c1279cc570ff8c8fdc708ce9b8f9f79509714658fe4921a89ef"
+          }
+        },
+        {
+          "values": {
+            "name": "member-2"
+          },
+          "payloadRecord": "p2paecn-chain-1 payload member-added\nname:8:member-2\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:hub\nseq:1:2\nkind:12:member-added\ncard:0:\nactor:7:*import\ntime:1:0\npayload:64:142e25c23a439207810f7b4b8d7753fda0c0ce96a1454abb2fbac9be123a3fef\nprev:64:fbdbb5ea3ad83c1279cc570ff8c8fdc708ce9b8f9f79509714658fe4921a89ef\n",
+          "entry": {
+            "seq": 2,
+            "kind": "member-added",
+            "card": null,
+            "actor": "*import",
+            "time": 0,
+            "payload": "142e25c23a439207810f7b4b8d7753fda0c0ce96a1454abb2fbac9be123a3fef",
+            "prev": "fbdbb5ea3ad83c1279cc570ff8c8fdc708ce9b8f9f79509714658fe4921a89ef",
+            "hash": "028900bc8bd371a0e4b7e136a672dbbaa701b9cc0a9e1fb456f924a40f6f4d81"
+          }
+        },
+        {
+          "values": {
+            "name": "member-3"
+          },
+          "payloadRecord": "p2paecn-chain-1 payload member-added\nname:8:member-3\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:hub\nseq:1:3\nkind:12:member-added\ncard:0:\nactor:7:*import\ntime:1:0\npayload:64:362fdb2d5879fce4eea4d082d7e2739ea23e9ca6c57069ac8f20e1422e9cd29e\nprev:64:028900bc8bd371a0e4b7e136a672dbbaa701b9cc0a9e1fb456f924a40f6f4d81\n",
+          "entry": {
+            "seq": 3,
+            "kind": "member-added",
+            "card": null,
+            "actor": "*import",
+            "time": 0,
+            "payload": "362fdb2d5879fce4eea4d082d7e2739ea23e9ca6c57069ac8f20e1422e9cd29e",
+            "prev": "028900bc8bd371a0e4b7e136a672dbbaa701b9cc0a9e1fb456f924a40f6f4d81",
+            "hash": "d752aae230675e17b6babfb77b3275871e7b379962d73e9adf8c7f6375161b46"
+          }
+        },
+        {
+          "values": {
+            "kind": "finding",
+            "severity": "question",
+            "title": "Is a sandbox mode planned for testing orders?",
+            "message": "7d3a9f40-0000-4000-8000-000000000008",
+            "text": "Asking for the next release."
+          },
+          "payloadRecord": "p2paecn-chain-1 payload card\nkind:7:finding\nseverity:8:question\ntitle:45:Is a sandbox mode planned for testing orders?\nmessage:36:7d3a9f40-0000-4000-8000-000000000008\ntext:28:Asking for the next release.\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:hub\nseq:1:4\nkind:4:card\ncard:36:0b6f2c1e-0000-4000-8000-000000000003\nactor:8:member-3\ntime:10:1794850000\npayload:64:19d438284f5aa1b815d1c229b9a44c07e581d304e51a9b38d4df2e75bed990c1\nprev:64:d752aae230675e17b6babfb77b3275871e7b379962d73e9adf8c7f6375161b46\n",
+          "entry": {
+            "seq": 4,
+            "kind": "card",
+            "card": "0b6f2c1e-0000-4000-8000-000000000003",
+            "actor": "member-3",
+            "time": 1794850000,
+            "payload": "19d438284f5aa1b815d1c229b9a44c07e581d304e51a9b38d4df2e75bed990c1",
+            "prev": "d752aae230675e17b6babfb77b3275871e7b379962d73e9adf8c7f6375161b46",
+            "hash": "f1c63912718ab857405d9ec85e43edb739b01ca33bcea659fdaa91233f672789"
+          }
+        },
+        {
+          "values": {
+            "id": "7d3a9f40-0000-4000-8000-000000000009",
+            "kind": "reply",
+            "replaces": null,
+            "text": "Not planned yet."
+          },
+          "payloadRecord": "p2paecn-chain-1 payload message\nid:36:7d3a9f40-0000-4000-8000-000000000009\nkind:5:reply\nreplaces:0:\ntext:16:Not planned yet.\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:hub\nseq:1:5\nkind:7:message\ncard:36:0b6f2c1e-0000-4000-8000-000000000003\nactor:8:member-1\ntime:10:1794850030\npayload:64:c6408dbdccffa087e6b740b1777dc4853e99ccab6e6aa3d6d6e2fcf9e5c8ae25\nprev:64:f1c63912718ab857405d9ec85e43edb739b01ca33bcea659fdaa91233f672789\n",
+          "entry": {
+            "seq": 5,
+            "kind": "message",
+            "card": "0b6f2c1e-0000-4000-8000-000000000003",
+            "actor": "member-1",
+            "time": 1794850030,
+            "payload": "c6408dbdccffa087e6b740b1777dc4853e99ccab6e6aa3d6d6e2fcf9e5c8ae25",
+            "prev": "f1c63912718ab857405d9ec85e43edb739b01ca33bcea659fdaa91233f672789",
+            "hash": "94c1c0387bd3344cb48a79dc495e448e8626d0b13c73f0264d273fb517b2cc37"
+          }
+        },
+        {
+          "values": {
+            "stage": "closed",
+            "outcome": "withdrawn"
+          },
+          "payloadRecord": "p2paecn-chain-1 payload stage\nstage:6:closed\noutcome:9:withdrawn\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:hub\nseq:1:6\nkind:5:stage\ncard:36:0b6f2c1e-0000-4000-8000-000000000003\nactor:7:*import\ntime:1:0\npayload:64:3a98842380d05ff83177ceaffcfdc66dbb07357bd4d0f91b5068fd0591ab584f\nprev:64:94c1c0387bd3344cb48a79dc495e448e8626d0b13c73f0264d273fb517b2cc37\n",
+          "entry": {
+            "seq": 6,
+            "kind": "stage",
+            "card": "0b6f2c1e-0000-4000-8000-000000000003",
+            "actor": "*import",
+            "time": 0,
+            "payload": "3a98842380d05ff83177ceaffcfdc66dbb07357bd4d0f91b5068fd0591ab584f",
+            "prev": "94c1c0387bd3344cb48a79dc495e448e8626d0b13c73f0264d273fb517b2cc37",
+            "hash": "084513c54303d6b206fd7b8b4b5481c6eeb4d78ec1b1f6b6e1ca64c551685f70"
+          }
+        },
+        {
+          "values": {
+            "name": "member-3"
+          },
+          "payloadRecord": "p2paecn-chain-1 payload member-removed\nname:8:member-3\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:hub\nseq:1:7\nkind:14:member-removed\ncard:0:\nactor:7:*import\ntime:1:0\npayload:64:730a625d72dd8eca5c58d1e4e812418cd8f2c9c44806542aaacf6502809fb97b\nprev:64:084513c54303d6b206fd7b8b4b5481c6eeb4d78ec1b1f6b6e1ca64c551685f70\n",
+          "entry": {
+            "seq": 7,
+            "kind": "member-removed",
+            "card": null,
+            "actor": "*import",
+            "time": 0,
+            "payload": "730a625d72dd8eca5c58d1e4e812418cd8f2c9c44806542aaacf6502809fb97b",
+            "prev": "084513c54303d6b206fd7b8b4b5481c6eeb4d78ec1b1f6b6e1ca64c551685f70",
+            "hash": "98aeeac394fd501024d575b56a13dd3d608969ad0dbbf6844d9db461fca20b66"
+          }
+        },
+        {
+          "values": {
+            "entries": 7
+          },
+          "payloadRecord": "p2paecn-chain-1 payload import\nentries:1:7\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:hub\nseq:1:8\nkind:6:import\ncard:0:\nactor:7:*import\ntime:1:0\npayload:64:5c024b56a4bbe726c12fba247bf7ea1ef0f28720c529fbff87f88235740a60bc\nprev:64:98aeeac394fd501024d575b56a13dd3d608969ad0dbbf6844d9db461fca20b66\n",
+          "entry": {
+            "seq": 8,
+            "kind": "import",
+            "card": null,
+            "actor": "*import",
+            "time": 0,
+            "payload": "5c024b56a4bbe726c12fba247bf7ea1ef0f28720c529fbff87f88235740a60bc",
+            "prev": "98aeeac394fd501024d575b56a13dd3d608969ad0dbbf6844d9db461fca20b66",
+            "hash": "0dbc4386df41394259d18bc0dfbe56ed41f40b5df0cfaf8a6609939421b3c3af"
+          }
+        },
+        {
+          "values": {
+            "name": "member-3"
+          },
+          "payloadRecord": "p2paecn-chain-1 payload member-added\nname:8:member-3\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:hub\nseq:1:9\nkind:12:member-added\ncard:0:\nactor:9:*operator\ntime:1:0\npayload:64:362fdb2d5879fce4eea4d082d7e2739ea23e9ca6c57069ac8f20e1422e9cd29e\nprev:64:0dbc4386df41394259d18bc0dfbe56ed41f40b5df0cfaf8a6609939421b3c3af\n",
+          "entry": {
+            "seq": 9,
+            "kind": "member-added",
+            "card": null,
+            "actor": "*operator",
+            "time": 0,
+            "payload": "362fdb2d5879fce4eea4d082d7e2739ea23e9ca6c57069ac8f20e1422e9cd29e",
+            "prev": "0dbc4386df41394259d18bc0dfbe56ed41f40b5df0cfaf8a6609939421b3c3af",
+            "hash": "fdd31acf071898b11d2e56db558068e3d08a6ac8d513d9fa6508a641b5b1b366"
+          }
+        },
+        {
+          "values": {
+            "id": "7d3a9f40-0000-4000-8000-000000000010",
+            "kind": "proof",
+            "replaces": null,
+            "text": "We run it against a copy."
+          },
+          "payloadRecord": "p2paecn-chain-1 payload message\nid:36:7d3a9f40-0000-4000-8000-000000000010\nkind:5:proof\nreplaces:0:\ntext:25:We run it against a copy.\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:hub\nseq:2:10\nkind:7:message\ncard:36:0b6f2c1e-0000-4000-8000-000000000003\nactor:8:member-2\ntime:10:1794936400\npayload:64:614a7648761d8af0882fc20073f586b8961893c394fcb41b47cce963cb1a557c\nprev:64:fdd31acf071898b11d2e56db558068e3d08a6ac8d513d9fa6508a641b5b1b366\n",
+          "entry": {
+            "seq": 10,
+            "kind": "message",
+            "card": "0b6f2c1e-0000-4000-8000-000000000003",
+            "actor": "member-2",
+            "time": 1794936400,
+            "payload": "614a7648761d8af0882fc20073f586b8961893c394fcb41b47cce963cb1a557c",
+            "prev": "fdd31acf071898b11d2e56db558068e3d08a6ac8d513d9fa6508a641b5b1b366",
+            "hash": "f1028922b335b8b4ccc696430edf0e2c90254cf9131e76da576e8a8cfd14ce19"
+          }
+        },
+        {
+          "values": {
+            "name": "member-3"
+          },
+          "payloadRecord": "p2paecn-chain-1 payload member-removed\nname:8:member-3\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:hub\nseq:2:11\nkind:14:member-removed\ncard:0:\nactor:9:*operator\ntime:1:0\npayload:64:730a625d72dd8eca5c58d1e4e812418cd8f2c9c44806542aaacf6502809fb97b\nprev:64:f1028922b335b8b4ccc696430edf0e2c90254cf9131e76da576e8a8cfd14ce19\n",
+          "entry": {
+            "seq": 11,
+            "kind": "member-removed",
+            "card": null,
+            "actor": "*operator",
+            "time": 0,
+            "payload": "730a625d72dd8eca5c58d1e4e812418cd8f2c9c44806542aaacf6502809fb97b",
+            "prev": "f1028922b335b8b4ccc696430edf0e2c90254cf9131e76da576e8a8cfd14ce19",
+            "hash": "ad5b4510df348c6acad7d7686ddbe6d6f418bed5939887803f90e5f4b6f32382"
+          }
+        }
+      ],
+      "head": {
+        "seq": 11,
+        "hash": "ad5b4510df348c6acad7d7686ddbe6d6f418bed5939887803f90e5f4b6f32382"
+      }
+    }
+  ]
+}

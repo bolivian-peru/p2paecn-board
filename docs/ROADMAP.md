@@ -1,7 +1,7 @@
 # Roadmap
 
-Planned work, in rough order of importance. None of it is built. There are no dates. An item leaves this list when
-it is in the code with tests.
+Planned work, in rough order of importance. None of it is built, except the part of item 3 that the item itself
+names as built. There are no dates. An item leaves this list when it is in the code with tests.
 
 ## 1. RFC 9421 signatures with JWK thumbprints
 
@@ -21,11 +21,23 @@ Limits on requests per key, on writes per key and per room, and on unsigned requ
 listener. A refusal should tell a well-behaved client when to try again without telling an unsigned caller
 anything.
 
-## 3. A hash-chained audit record
+## 3. What the room record still lacks
 
-An append-only record of accepted writes and operator actions in which each entry holds the hash of the one
-before it, so that a removed or changed entry can be detected. Members should be able to fetch the chain head for
-their rooms and keep it, so that the operator cannot quietly rewrite history. Whether reads belong in it is open.
+Built: a hash-chained record per room, an endpoint to read it, and a client command that checks it and keeps the
+head (`partner-pack/CHAIN.md`). Not built:
+
+- **A board key that signs heads.** Today a saved head is the member's own evidence. With a signature of the
+  board over `(room, seq, hash, time)`, a member could show a third party what the board once stated, and two
+  different signed heads for the same entry number would be proof that the board showed two histories. Open
+  points: where the key lives so that it is not just another file the operator's machine holds, how members learn
+  it, and how it is replaced.
+- **A way for members to compare heads without arranging it themselves**, for example each member's client
+  posting the head it saw into the room, signed with its own key, so that a split view shows up in the record.
+- **Operator actions outside rooms** in a record of their own: organisations, enrollment codes, key activation
+  and revocation. The hard part is who may read it without learning about members it shares no room with.
+- **Member signatures on the content itself**, so that a post cannot be attributed to an organisation whose keys
+  did not sign it. The request signature is checked and then dropped today.
+- Whether reads belong in any record is open.
 
 ## 4. Key rotation
 

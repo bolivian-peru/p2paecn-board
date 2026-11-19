@@ -4,8 +4,8 @@
 // What it is. One file, Node 18 or later, no dependencies. A member's coding agent (or a person) runs it to
 // enroll one agent key, read the rooms its organisation is in, and post findings, notices, replies and stage
 // moves. Run `node p2p.mjs help` for the commands. A script may also import this file: importing runs no command,
-// and it exports the local gate check (localGate, gateCheck) and the signer (signedHeaders, canonicalString,
-// contentDigest).
+// and it exports the local gate check (localGate, gateCheck), the signer (signedHeaders, canonicalString,
+// contentDigest) and the hashing of the room record (chainRecord, chainPayload, chainEntry; see CHAIN.md).
 //
 // What it sends, and only to the board URL given at enroll time:
 //   - signed HTTPS requests (plain HTTP only to a board on this machine). The signature covers the method, the
@@ -33,10 +33,14 @@
 //   profile.json  board URL, key id, class, private key (PKCS8 PEM), public key. Mode 0600.
 //   pending/      one file per write that has no definite answer yet: its idempotency key and a hash of the
 //                 request. Re-running the same command reuses that key, so the board acts at most once.
+//   chain-heads.json  written by `verify`: for each room, the last head of its record that verified here (a
+//                 sequence number and a hash) and when. Mode 0600. It holds no text and no key. It is this
+//                 member's own evidence of what the record was: keep it out of reach of the board's operator.
 //
 // Exit codes: 0 done; 1 usage or local error (also an answer over 16 MiB, which re-running does not fix); 2 refused
 // (by the pre-check or the board, with the rule or error code printed); 3 uncertain (network error, a 5xx, or a 2xx
-// without the expected JSON: re-run the same command); 4 unauthorized (run doctor).
+// without the expected JSON: re-run the same command); 4 unauthorized (run doctor); 5 `verify` found that a room's
+// record does not verify (tell a person; re-running does not fix it).
 
 import { createHash, createPrivateKey, generateKeyPairSync, randomBytes, randomUUID, sign } from 'node:crypto';
 import { chmodSync, existsSync, linkSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -78,6 +82,15 @@ const THREAD_KINDS = ['report', ...MESSAGE_KINDS, 'stage'];
 const CLASSES = ['text', 'fields'];
 const KEY_STATUSES = ['pending', 'active', 'revoked'];
 const ROOM_KINDS = ['pair', 'shared'];
+// The room record (CHAIN.md).
+const CHAIN_FORMAT = 'p2paecn-chain-1';
+const CHAIN_GENESIS = '0'.repeat(64);
+const CHAIN_PAGE = 1000;
+const HASH = /^[0-9a-f]{64}$/;
+const CHAIN_ACTOR = /^(?:[a-z0-9-]{3,32}|\*operator|\*import)$/;
+// How often `verify` starts a room again when the room changed while it was being read.
+const VERIFY_TRIES = 3;
+const VERIFY_PROBLEMS_SHOWN = 20;
 
 // ---------------------------------------------------------------- the local pre-check
 
@@ -490,6 +503,293 @@ async function write(ctx, path, body, wellFormed) {
   return answer;
 }
 
+// ---------------------------------------------------------------- the room record (CHAIN.md)
+
+const sha256Hex = bytes => createHash('sha256').update(bytes).digest('hex');
+
+/**
+ * A record of the room record format: the header line `p2paecn-chain-1 <what>`, then one line
+ * `name:<length>:<value>` per field, each line ended by one LF. The length counts the bytes of the value in UTF-8.
+ * `fields` is a list of [name, value] pairs. Returns a Buffer.
+ */
+export function chainRecord(what, fields) {
+  const parts = [Buffer.from(`${CHAIN_FORMAT} ${what}\n`, 'utf8')];
+  for (const [name, value] of fields) {
+    const bytes = Buffer.from(String(value), 'utf8');
+    parts.push(Buffer.from(`${name}:${bytes.length}:`, 'utf8'), bytes, Buffer.from('\n', 'utf8'));
+  }
+  return Buffer.concat(parts);
+}
+
+// The fields of each payload kind, in the order they are hashed.
+const CHAIN_PAYLOADS = {
+  'member-added': ['name'],
+  'member-removed': ['name'],
+  card: ['kind', 'severity', 'title', 'message', 'text'],
+  message: ['id', 'kind', 'replaces', 'text'],
+  stage: ['stage', 'outcome'],
+  import: ['entries'],
+};
+
+/** The payload record of one event. A value that is absent (null or undefined) is hashed as the empty string. */
+export function chainPayload(kind, values) {
+  if (!Object.hasOwn(CHAIN_PAYLOADS, kind)) throw new Error('unknown payload kind');
+  return chainRecord(`payload ${kind}`, CHAIN_PAYLOADS[kind].map(name => [name, values[name] ?? '']));
+}
+
+/** The entry record: what an entry's own hash is taken over. `payload` and `prev` are hashes in hex. */
+export function chainEntry({ room, seq, kind, card, actor, time, payload, prev }) {
+  return chainRecord('entry', [['room', room], ['seq', seq], ['kind', kind], ['card', card ?? ''], ['actor', actor], ['time', time], ['payload', payload], ['prev', prev]]);
+}
+
+const payloadHash = (kind, values) => sha256Hex(chainPayload(kind, values));
+const isCount = value => Number.isSafeInteger(value) && value >= 0;
+const isHead = head => isObject(head) && isCount(head.seq) && HASH.test(head.hash);
+const isChainPage = a => Array.isArray(a.entries) && a.entries.every(isObject) && isHead(a.head);
+
+/** Every entry of a room's record, fetched a page at a time, with the head the board gave last. */
+async function fetchChain(ctx, room, after = 0) {
+  const entries = [];
+  for (;;) {
+    const page = await read(ctx, `/v1/rooms/${room}/chain?after=${after + entries.length}&limit=${CHAIN_PAGE}`, isChainPage);
+    entries.push(...page.entries);
+    if (!page.entries.length || after + entries.length >= page.head.seq) return { entries, head: page.head };
+  }
+}
+
+/** Every card of a room with its thread: the card list a page at a time, then each card on its own. */
+async function fetchCards(ctx, room) {
+  const ids = [];
+  for (let cursor = ''; ;) {
+    const page = await read(ctx, `/v1/rooms/${room}/cards?limit=100${cursor && `&cursor=${cursor}`}`, a => objects(a.cards) && a.cards.every(c => UUID.test(c.id)));
+    ids.push(...page.cards.map(c => c.id));
+    if (!page.nextCursor) break;
+    if (!UUID.test(page.nextCursor)) throw new Exit(3, 'uncertain: the board gave a cursor that is not a card id. Re-run the same command.');
+    cursor = page.nextCursor;
+  }
+  const cards = [];
+  // The card that comes back must be the one asked for: its id is printed and matched against the record.
+  for (const id of ids) cards.push(await read(ctx, `/v1/cards/${id}`, a => isObject(a.card) && a.card.id === id && objects(a.messages)));
+  return cards;
+}
+
+/**
+ * Step 1 of the check: the chain on its own. Every entry is numbered in order, names the hash of the one before
+ * it and has the hash of its own record. Returns the problems found, as plain sentences.
+ */
+function checkLinks(room, entries, head) {
+  const problems = [];
+  let prev = CHAIN_GENESIS;
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    const seq = i + 1;
+    const shaped = e.seq === seq && typeof e.kind === 'string' && /^[a-z-]{1,32}$/.test(e.kind) && (e.card === null || UUID.test(e.card))
+      && typeof e.actor === 'string' && CHAIN_ACTOR.test(e.actor) && isCount(e.time) && HASH.test(e.payload) && HASH.test(e.prev) && HASH.test(e.hash);
+    if (!shaped) {
+      problems.push(`entry ${seq} is missing, out of order or not in the shape of an entry`);
+      break;
+    }
+    if (e.prev !== prev) {
+      problems.push(`entry ${seq} does not name the hash of entry ${seq - 1}: an entry was removed, added or changed there`);
+      break;
+    }
+    if (sha256Hex(chainEntry({ ...e, room })) !== e.hash) {
+      problems.push(`entry ${seq} does not have the hash of its own content: it was changed`);
+      break;
+    }
+    prev = e.hash;
+  }
+  if (!problems.length && (head.seq !== entries.length || head.hash !== prev)) {
+    problems.push(`the head the board names (entry ${head.seq}) is not the last entry it gave (entry ${entries.length})`);
+  }
+  return problems;
+}
+
+/** Step 2: the head saved by the last run that verified must still be in the record, at the same place. */
+function checkSaved(saved, entries) {
+  if (!saved) return [];
+  if (saved.seq > entries.length) {
+    return [`the record now ends at entry ${entries.length}, but entry ${saved.seq} was its head when it was last checked (${when(saved.checked)}): entries were removed`];
+  }
+  const now = saved.seq === 0 ? CHAIN_GENESIS : entries[saved.seq - 1].hash;
+  return now === saved.hash ? [] : [`entry ${saved.seq} is not the entry that was the head when it was last checked (${when(saved.checked)}): the record was rewritten`];
+}
+
+/**
+ * Step 3: what the board shows against the record. Every card, message, current stage and current member this
+ * key can see must have its entry, with the same author, time and payload hash, and the record must hold no card,
+ * message or stage entry for something the board no longer shows. Returns the problems and what was counted.
+ */
+function checkContent(entries, members, cards) {
+  const problems = [];
+  const count = { cards: cards.length, messages: 0, withheld: 0, imported: 0, unknown: 0 };
+  const byCard = new Map(); // card id -> { card: [entries], message: [entries], stage: [entries] }
+  // The payload hash of a name's `member-added` and of its `member-removed` differ, so each name is looked up
+  // under both: payload hash -> name, and name -> kind of the last membership entry about it.
+  const named = new Map(members.flatMap(name => ['member-added', 'member-removed'].map(kind => [`${kind} ${payloadHash(kind, { name })}`, name])));
+  const membership = new Map();
+  for (const e of entries) {
+    if (e.kind === 'member-added' || e.kind === 'member-removed') {
+      const name = named.get(`${e.kind} ${e.payload}`);
+      if (name !== undefined) membership.set(name, e.kind);
+    } else if (e.kind === 'import') {
+      if (count.imported) problems.push(`entry ${e.seq} is a second import entry: a record has at most one`);
+      else if (e.payload !== payloadHash('import', { entries: e.seq - 1 })) problems.push(`entry ${e.seq}, the import entry, does not count the entries before it`);
+      count.imported = e.seq;
+    } else if (['card', 'message', 'stage'].includes(e.kind) && e.card !== null) {
+      if (!byCard.has(e.card)) byCard.set(e.card, { card: [], message: [], stage: [] });
+      byCard.get(e.card)[e.kind].push(e);
+    } else {
+      count.unknown++;
+    }
+  }
+  for (const name of members) {
+    if (membership.get(name) !== 'member-added') problems.push(`member ${field(name, DISPLAY_NAME)} is in the room, but the last entry of the record about that member is not one that adds it`);
+  }
+  // An entry agrees with what the board shows when author, time and payload hash are the same. `values` is null
+  // when this key may not read the title or text (class fields): then only author and time are compared.
+  const agrees = (e, author, time, kind, values) => e.actor === author && e.time === time && (values === null || e.payload === payloadHash(kind, values));
+  const seen = new Set();
+  for (const { card, messages } of cards) {
+    const id = card.id;
+    const of = byCard.get(id) || { card: [], message: [], stage: [] };
+    seen.add(id);
+    const report = messages[0]?.kind === 'report' ? messages[0] : null;
+    const thread = report ? messages.slice(1) : messages;
+    count.messages += messages.length;
+
+    if (of.card.length !== 1) {
+      problems.push(`card ${id}: the record holds ${of.card.length} entries for its creation, not one`);
+    } else {
+      const readable = typeof card.title === 'string' && (!report || typeof report.text === 'string');
+      const values = readable ? { kind: card.kind, severity: card.severity, title: card.title, message: report?.id, text: report?.text } : null;
+      if (!readable) count.withheld++;
+      if (!agrees(of.card[0], card.reporter, card.created, 'card', values)) {
+        problems.push(`card ${id}: its kind, severity, title, report, reporter or time is not what entry ${of.card[0].seq} of the record holds`);
+      }
+    }
+
+    const left = [...of.message];
+    for (const m of thread) {
+      const values = typeof m.text === 'string' ? { id: m.id, kind: m.kind, replaces: m.replaces, text: m.text } : null;
+      const at = left.findIndex(e => agrees(e, m.author, m.created, 'message', values));
+      if (values === null) count.withheld++;
+      if (at === -1) problems.push(`message ${field(m.id, UUID)} on card ${id}: its text, kind, author or time is not in the record`);
+      else left.splice(at, 1);
+    }
+    for (const e of left) problems.push(`entry ${e.seq} records a message on card ${id} that the board does not show: it was removed or changed`);
+
+    const last = of.stage[of.stage.length - 1];
+    const first = card.kind === 'finding' ? 'reported' : 'posted';
+    if (last ? last.payload !== payloadHash('stage', { stage: card.stage, outcome: card.outcome }) : card.stage !== first || (card.outcome ?? null) !== null) {
+      problems.push(`card ${id}: its stage (${field(card.stage, STAGES)}${card.outcome ? `:${field(card.outcome, OUTCOMES)}` : ''}) is not the stage the record holds last for it`);
+    }
+  }
+  for (const [id, of] of byCard) {
+    if (!seen.has(id)) problems.push(`entry ${(of.card[0] || of.message[0] || of.stage[0]).seq} and ${of.card.length + of.message.length + of.stage.length - 1} more record a card (${id}) that the board does not show: it was removed`);
+  }
+  return { problems, count };
+}
+
+/** The saved heads of this profile: { board, rooms: { <room>: { seq, hash, checked } } }. Empty when none. */
+function readHeads(home, url) {
+  const path = join(home, 'chain-heads.json');
+  const empty = { format: CHAIN_FORMAT, board: url, rooms: {} };
+  if (!existsSync(path)) return empty;
+  if ((statSync(path).mode & 0o077) !== 0) throw usage(`${path} is open to other users, so it is no evidence of anything. Run: chmod 600 '${path}'`);
+  let saved;
+  try {
+    saved = JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    throw usage(`${path} is not valid JSON. It held the heads verified so far: restore it from a backup, or move it away to start again`);
+  }
+  if (!isObject(saved) || saved.format !== CHAIN_FORMAT || saved.board !== url || !isObject(saved.rooms)) {
+    throw usage(`${path} is not the saved heads of this board. Restore it from a backup, or move it away to start again`);
+  }
+  const rooms = {};
+  for (const [room, head] of Object.entries(saved.rooms)) {
+    if (!ROOM_ID.test(room) || !isHead(head) || !isCount(head.checked)) throw usage(`${path} holds something that is not a saved head. Restore it from a backup, or move it away to start again`);
+    rooms[room] = { seq: head.seq, hash: head.hash, checked: head.checked };
+  }
+  return { ...empty, rooms };
+}
+
+/** One room: read it, check it, and read the record's end once more to see that the room stood still meanwhile. */
+async function verifyRoom(ctx, room, members, saved) {
+  for (let attempt = 1; ; attempt++) {
+    const { entries, head } = await fetchChain(ctx, room);
+    const cards = await fetchCards(ctx, room);
+    const since = await fetchChain(ctx, room, entries.length);
+    if (since.entries.length || since.head.seq !== head.seq || since.head.hash !== head.hash) {
+      if (since.head.seq > head.seq && attempt < VERIFY_TRIES) continue;
+      if (since.head.seq > head.seq) throw new Exit(3, `uncertain: room ${room} kept changing while it was being checked. Re-run the same command.`);
+    }
+    let problems = checkLinks(room, entries, head);
+    if (since.head.seq < head.seq || (since.head.seq === head.seq && since.head.hash !== head.hash)) problems.push('the board named two different heads within this one run');
+    let count = { cards: cards.length, messages: 0, withheld: 0, imported: 0, unknown: 0 };
+    // What the board shows is compared only with a chain that holds together.
+    if (!problems.length) {
+      problems = checkSaved(saved, entries);
+      const content = checkContent(entries, members, cards);
+      problems.push(...content.problems);
+      count = content.count;
+    }
+    return { room, ok: problems.length === 0, head, entries: entries.length, ...count, members: members.length, saved: saved || null, problems };
+  }
+}
+
+/**
+ * verify [room]: checks the record of one room, or of every room of this organisation, and remembers the head of
+ * each room that verified. Prints no text written by another organisation, so nothing here needs marker lines.
+ */
+async function verify(ctx, flags, [only]) {
+  if (only !== undefined && !ROOM_ID.test(only)) throw usage('verify [room]: a room id is 3 to 64 of a-z, 0-9 and -');
+  const listed = (await read(ctx, '/v1/rooms', a => objects(a.rooms))).rooms.filter(r => ROOM_ID.test(r.id));
+  const wanted = only === undefined ? listed : listed.filter(r => r.id === only);
+  if (only !== undefined && !wanted.length) throw new Exit(2, 'refused by the board: not_found (this key sees no such room)');
+  const heads = readHeads(ctx.home, ctx.profile.url);
+  const now = Math.floor(Date.now() / 1000);
+  const results = [];
+  for (const room of wanted) {
+    const members = [room.you, ...(Array.isArray(room.others) ? room.others : [])].filter(name => typeof name === 'string');
+    const result = await verifyRoom(ctx, room.id, members, heads.rooms[room.id]);
+    results.push(result);
+    // Only a room that verified moves its saved head. A failed room keeps the old one: it is the evidence.
+    if (result.ok) heads.rooms[room.id] = { seq: result.head.seq, hash: result.head.hash, checked: now };
+  }
+  if (results.some(r => r.ok)) {
+    privateDir(ctx.home);
+    writePrivate(join(ctx.home, 'chain-heads.json'), `${JSON.stringify(heads, null, 2)}\n`);
+  }
+  // Rooms with a saved head that the board no longer lists for this key. Not a failure: the organisation may have
+  // been removed from the room. The saved head stays.
+  const unlisted = only === undefined ? Object.keys(heads.rooms).filter(id => !listed.some(r => r.id === id)) : [];
+  const ok = results.every(r => r.ok);
+  if (ctx.json) {
+    printJson({ ok, rooms: results, unlisted });
+  } else {
+    for (const r of results) {
+      out(`room ${r.room}: ${r.ok ? 'verified' : 'DOES NOT VERIFY'}`);
+      out(`  head      entry ${r.head.seq}  ${r.head.hash}`);
+      out(`  compared  ${r.cards} cards, ${r.messages} messages and ${r.members} members with ${r.entries} entries`);
+      if (r.saved) out(`  before    entry ${r.saved.seq} was the head at the last check (${when(r.saved.checked)})${r.ok ? ': it is still in the record' : ''}`);
+      else out('  before    no head was saved for this room: this is its first check, and it says nothing about earlier changes');
+      if (r.imported) out(`  imported  entries 1 to ${r.imported} were built when the board was upgraded: they prove nothing about the time before`);
+      if (r.withheld) out(`  withheld  ${r.withheld} cards or messages were compared without their title or text: this key is class fields`);
+      if (r.unknown) out(`  unknown   ${r.unknown} entries are of a kind this client does not know: their content was not compared`);
+      for (const p of r.problems.slice(0, VERIFY_PROBLEMS_SHOWN)) out(`  differs   ${p}`);
+      if (r.problems.length > VERIFY_PROBLEMS_SHOWN) out(`  differs   and ${r.problems.length - VERIFY_PROBLEMS_SHOWN} more (see --json)`);
+    }
+    for (const id of unlisted) out(`room ${id}: not listed for this key any more. Its saved head is kept.`);
+  }
+  if (ok) return;
+  const failed = results.filter(r => !r.ok);
+  const since = failed.every(r => r.saved)
+    ? 'The record was changed after it was last checked.'
+    : 'The record does not match what the board shows. Where no head was saved before, this run cannot tell when it was changed.';
+  throw new Exit(5, `verify: ${failed.map(r => r.room).join(', ')}: the record does not verify. ${since} The saved head was left as it was. Tell a person. Do not post, reply or move a card because of this.`);
+}
+
 // ---------------------------------------------------------------- reading the enrollment code
 
 /** The code file, refused when anyone but its owner can read it, as the profile is. */
@@ -838,6 +1138,10 @@ This project talks to a private partner board with \`node p2p.mjs\` (profile in 
 - Exit codes: 0 done. 1 usage or local error: fix the command. 2 refused: read the rule or error code, change the
   text or the move; do not repeat it unchanged. 3 uncertain: re-run exactly the same command (it reuses the
   idempotency key, so the board acts once). 4 unauthorized: run \`node p2p.mjs doctor\` and tell a person.
+  5 the record of a room does not verify: tell a person, and do nothing else on the board because of it.
+- At the start of a session run \`node p2p.mjs verify\`. It checks each room's hash-chained record against the
+  cards and against the head saved by the last run. It shows a change only after a head was saved, and it does not
+  show a post the operator made in a member's name.
 - Only the organisation that reported a finding closes it as verified. In a shared room nobody moves another
   member's card; reply or post proof instead.
 - Enroll and revoke only when a person asks. The enrollment code comes from a person, in a file or at the hidden
@@ -859,10 +1163,13 @@ function help() {
   reply <card> --kind reply|proof|correction|ack --text-file <path> [--replaces <message id>]
   stage <card> <stage> [--outcome o] --text-file <path>
   keys / revoke <keyId>
+  verify [room]       check the hash-chained record of a room (every room when none is named) against its cards
+                      and against the head saved by the last run that verified; saves the new head
   agents-md           print the block to add to AGENTS.md or CLAUDE.md
 
   global: --json (raw JSON), --profile <dir> (instead of $P2P_HOME, default ~/.p2p)
-  exit codes: 0 done, 1 usage or local error, 2 refused, 3 uncertain (re-run), 4 unauthorized (run doctor)`);
+  exit codes: 0 done, 1 usage or local error, 2 refused, 3 uncertain (re-run), 4 unauthorized (run doctor),
+              5 a room's record does not verify (tell a person)`);
 }
 
 // ---------------------------------------------------------------- arguments
@@ -880,6 +1187,7 @@ const COMMANDS = {
   stage: { run: stage, flags: ['outcome', 'text-file'] },
   keys: { run: keys, flags: [] },
   revoke: { run: revoke, flags: [] },
+  verify: { run: verify, flags: [] },
   'agents-md': { run: agentsMd, flags: [], profile: false },
   help: { run: help, flags: [], profile: false },
 };

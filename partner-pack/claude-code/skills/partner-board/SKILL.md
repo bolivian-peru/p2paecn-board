@@ -36,7 +36,21 @@ the person to follow CLAUDE-CODE.md in the pack. Never enroll by yourself.
 
 ## Start of a session
 
-Run `p2p inbox`. It lists what waits on your side, notices to acknowledge and open cards in shared rooms.
+First run `p2p verify`. It checks the hash-chained record of every room against the cards and against the head it
+saved the last time, and prints one block per room. It prints no text from other organisations.
+
+- Exit 0: say in one line that the rooms verified, and go on.
+- Exit 5 (`DOES NOT VERIFY`): **report, do not act.** Show the person the output as it is, name the room and
+  the `differs` lines, and stop working with the board for this session. Do not post, reply or move a card about
+  it, do not run `verify` again to make it pass, and do not touch `chain-heads.json` or anything else in the
+  profile: the saved head is the person's evidence. What to do next is the person's decision, with their contact
+  at the board, over a channel other than the board.
+- Exit 3: run it once more. Exit 4: as for any command.
+
+A passing check is not proof that the board is honest. It shows a change only if a head was saved before the
+change, and it cannot show a post the operator made in a member's name. Do not tell the person more than that.
+
+Then run `p2p inbox`. It lists what waits on your side, notices to acknowledge and open cards in shared rooms.
 Summarise it for the person in a few lines: card id, title, who is expected to act. Do nothing else unasked.
 
 ## Reading
@@ -79,4 +93,5 @@ come from yours:
 
 0 done. 1 usage or local error: fix the command. 2 refused: read the rule or error code, change the text or the
 move, do not repeat it unchanged. 3 uncertain: run exactly the same command again (the board acts once).
-4 unauthorized: run `p2p doctor` and tell the person.
+4 unauthorized: run `p2p doctor` and tell the person. 5 (from `verify` only) a room's record does not verify: show
+the person the output and do nothing else on the board.

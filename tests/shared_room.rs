@@ -131,7 +131,7 @@ async fn only_the_reporter_closes_a_shared_card() {
     assert_eq!(w.post(&h.supplier, &format!("/v1/cards/{notice}/stage"), moves[0].clone()).await.0, StatusCode::CONFLICT);
 
     let (_, rooms) = w.get(&h.reseller, "/v1/rooms").await;
-    assert_eq!(rooms, json!({ "rooms": [{ "id": "hub", "kind": "shared", "you": "member-2", "others": ["member-1", "member-3"],
+    assert_eq!(without_heads(rooms), json!({ "rooms": [{ "id": "hub", "kind": "shared", "you": "member-2", "others": ["member-1", "member-3"],
         "members": [{ "name": "member-2", "you": true, "joined": true }, { "name": "member-1", "you": false },
                     { "name": "member-3", "you": false }] }] }));
 }

@@ -88,7 +88,7 @@ async fn organisations_and_rooms_are_checked() {
     let (status, state) = w.op("GET", "/state", Value::Null).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(state["orgs"], json!(["reseller-x", "reseller-y", "reseller-z", "supplier-a"]));
-    assert_eq!(state["rooms"][1], json!({ "id": "hub", "kind": "shared", "members": [
+    assert_eq!(without_heads(state["rooms"][1].clone()), json!({ "id": "hub", "kind": "shared", "members": [
         { "org": "supplier-a", "handle": "member-1", "removed": false },
         { "org": "reseller-x", "handle": "member-2", "removed": false }] }));
 

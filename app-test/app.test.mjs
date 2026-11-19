@@ -731,6 +731,9 @@ test('a viewer key enrolled by the app: pending, activated by the operator, read
   assert.equal(await activate(viewer.keyId, local.toUpperCase().replace(/-/g, '')), 200);
   me = await get('/v1/whoami');
   assert.equal(me.status, 200);
+  // Each room also carries the head of its record (`chain`), which this view does not use.
+  assert.ok(me.json.rooms.every(r => Number.isInteger(r.chain.seq) && /^[0-9a-f]{64}$/.test(r.chain.hash)));
+  for (const room of me.json.rooms) delete room.chain;
   assert.deepEqual({ ...me.json, expires: 0, serverTime: 0 }, { keyId: 'reseller-x/viewer-ab12', org: 'reseller-x', class: 'viewer', status: 'active',
     fingerprint: local, expires: 0, role: 'manager', label: 'Office manager', serverTime: 0,
     rooms: [{ id: 'a-x', kind: 'pair', you: 'reseller-x', others: ['supplier-a'],

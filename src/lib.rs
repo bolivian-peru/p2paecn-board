@@ -1,6 +1,7 @@
 //! P2PAECN board server. See README.md for what exists and what does not.
 
 pub mod api;
+pub mod chain;
 pub mod gate;
 pub mod operator;
 pub mod sig;
@@ -65,8 +66,9 @@ pub const NOT_SAVED: Refusal = (StatusCode::INTERNAL_SERVER_ERROR, "state_not_sa
 pub enum Source {
     /// No `P2PAECN_STATE`.
     Memory,
-    /// The state file existed; `config_ignored` when `P2PAECN_CONFIG` was set too.
-    Loaded { config_ignored: bool },
+    /// The state file existed; `config_ignored` when `P2PAECN_CONFIG` was set too. `chains_built` when the file
+    /// was written before rooms had chains, so that they were built from it at this start (`chain::import`).
+    Loaded { config_ignored: bool, chains_built: bool },
     /// The state file did not exist; it was written at start, from the config or empty.
     Created { from_config: bool },
 }
@@ -130,10 +132,10 @@ impl Shared {
             return Ok((read_config(host)?, Source::Memory));
         };
         let (mut shared, source) = match state::load(&path).map_err(|e| format!("{e}; the board is not started and the file is left as it is"))? {
-            Some((store, saved_host)) => {
+            Some((store, saved_host, chains_built)) => {
                 let host = host.or(Some(saved_host)).filter(|h| !h.is_empty()).ok_or("the state file holds no host: set P2PAECN_HOST")?;
                 let shared = Shared { host, store: Mutex::new(store), state: None, not_before: None };
-                (shared, Source::Loaded { config_ignored: config.is_some() })
+                (shared, Source::Loaded { config_ignored: config.is_some(), chains_built })
             }
             None => {
                 let shared = read_config(host)?;

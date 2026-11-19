@@ -809,3 +809,7 @@ test('no enrollment code appears in any output or profile file, and no private k
     for (const text of stored) assert.ok(!text.includes(code) && !text.includes(hash), 'a code was stored');
   }
 });
+
+// The tests of `verify` and the room record are in their own file, with their own board on the next port. The
+// directory's package.json names this file as its entry, so `node --test client-test/` reaches them through here.
+await import('./verify.test.mjs');

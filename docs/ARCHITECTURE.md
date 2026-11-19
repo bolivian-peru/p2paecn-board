@@ -37,14 +37,16 @@ This describes the code as it is in this repository. The API in full is in
 | Public routes | `src/api.rs` | Routing, authentication, the access rules, the views each key class gets, idempotent writes, listener timeouts |
 | Signature | `src/sig.rs` | The canonical string, the checks and their order, the fingerprint |
 | Content gate | `src/gate.rs` | The patterns every title and text must pass |
-| Record | `src/store.rs` | Organisations, rooms, keys, enrollment codes, cards, messages, replay records, nonces |
+| Record | `src/store.rs` | Organisations, rooms, keys, enrollment codes, cards, messages, each room's chain, replay records, nonces |
+| Room record | `src/chain.rs` | The hash chain of each room: the bytes that are hashed, appending, the check of the links, and building chains from a state file that has none |
 | State file | `src/state.rs` | Format, load with checks, atomic save |
 | Operator channel | `src/operator.rs` | The routes the operator calls over the Unix socket |
 | Web view | `src/app.html`, `src/app.js`, `src/app.css` | Compiled into the binary and served as static files |
 | Client | `partner-pack/p2p.mjs` | One file for Node 18 or later with no dependencies |
 
 There is no database, no background job, no outgoing network call and no template engine. The server depends on
-axum, tokio, hyper, ed25519-dalek, sha2, base64, serde, uuid, regex and getrandom.
+axum, tokio, hyper, ed25519-dalek, sha2, base64, serde, uuid, regex and getrandom. The room record added no
+dependency.
 
 ## Data model
 
@@ -56,11 +58,13 @@ axum, tokio, hyper, ed25519-dalek, sha2, base64, serde, uuid, regex and getrando
 | Enrollment code | id, hash of the code, organisation, class, expiry, key lifetime, who used it | The code itself is returned once and never stored |
 | Card | id, room, kind (`finding` or `notice`), severity, title, reporting organisation, stage, outcome, created, updated | A finding moves through `reported`, `acknowledged`, `need-info`, `shipped`, `closed`. A notice is `posted` and stays there |
 | Message | id, card, organisation, key id, kind, text, replaces, created | Kinds: `report`, `reply`, `proof`, `correction`, `ack`, `stage`. Append only |
+| Chain entry | room, seq, kind, card, actor, time, payload hash, hash of the entry before, own hash | One list per room, append only. Kinds: `member-added`, `member-removed`, `card`, `message`, `stage`, `import`. The actor is a display name of the room, `*operator` or `*import` |
 | Replay record | signing key id, idempotency key, path and body digest, the first answer | Lets a repeated write return its first answer |
 | Nonce | key id, nonce, time first seen | Kept in memory for 601 seconds. Never saved |
 
-Nothing is edited or deleted. A correction is a new message that names the one it corrects. A closed card stays
-closed.
+The API edits and deletes nothing. A correction is a new message that names the one it corrects. A closed card
+stays closed. Whoever can write the state file can still change it: see "The room record" below for what a member
+can then notice.
 
 ## Request flow
 
@@ -88,9 +92,12 @@ A signed request, for example `POST /v1/rooms/room-a/cards`:
 7. **Fields and gate.** Each field is checked in turn. A title or text is checked for its length and then by the
    content gate.
 8. **Room rules.** Who may move a card depends on the room kind and on who reported it (see below).
-9. **Save.** With a state file, the whole record, the replay record included, is written before the answer goes
-   out. If the save fails, the change is undone and the answer is `500 state_not_saved`.
-10. **View.** The answer is built for the calling key: display names depend on the room kind, and a `fields` key
+9. **Room record.** After the last check that can refuse, the event is appended to its room's chain: one `card`
+   entry for a new card, one `message` entry for a message, and for a stage move a `message` entry for its text
+   and a `stage` entry for the stage it set. A replayed write (step 6) never gets here.
+10. **Save.** With a state file, the whole record, the chains and the replay record included, is written before
+   the answer goes out. If the save fails, the change is undone and the answer is `500 state_not_saved`.
+11. **View.** The answer is built for the calling key: display names depend on the room kind, and a `fields` key
     gets `null` in place of titles and texts written by another organisation.
 
 ## Key lifecycle
@@ -138,6 +145,39 @@ id. It does not stop a later organisation from taking an id equal to a handle: t
 
 When a member is removed from a shared room, its cards and messages stay under its handle, its open findings are
 closed as `withdrawn`, and the handle stays taken.
+
+## The room record
+
+Each room has a chain of entries (`src/chain.rs`), specified byte for byte in
+[partner-pack/CHAIN.md](../partner-pack/CHAIN.md) under the label `p2paecn-chain-1`.
+
+- **Per room, never global.** A chain for the whole board would let a member count the writes in rooms it is not
+  in.
+- **What an entry holds:** its number in the room (from 1), its kind, the card id where there is one, the actor,
+  the board's time, the SHA-256 of the event's payload, the hash of the entry before, and its own hash. The actor
+  is the name the room shows: the organisation id in a pair room, the handle in a shared room, by the same
+  function that names authors everywhere else (`Room::display_name`). It is never a key id. Operator actions have
+  the actor `*operator`. Titles and texts are in the chain only inside a hash.
+- **What is hashed** is a record of lines `name:<byte length>:<value>`, under a header line with the format label.
+  The length prefix keeps a text from posing as another field. The payload of a card covers its kind, severity,
+  title, and the id and text of its report message; of a message its id, kind, the id it replaces, and its text;
+  of a stage move the stage and outcome; of a membership change the member's display name.
+- **When entries are appended:** room creation (one `member-added` per member), adding and removing a member of
+  a shared room (a removal also appends one `stage` entry per finding it closes), a new card, a message, a stage
+  move (two entries). Membership entries carry the time 0: see the threat model for why.
+- **Reading it:** `GET /v1/rooms/{room}/chain` with `after` and `limit`, the same bytes for every member and
+  every key class. `GET /v1/rooms`, `GET /v1/whoami` and the operator's `GET /state` give each room's head.
+- **Checking it** is the member's job, not the server's. The client's `verify` recomputes every hash, compares
+  each card, message, stage and member it can see with the chain, and compares the chain with the head it saved
+  the last time. The server checks only, at start, that each stored chain links.
+- **Old state:** a state file of version 1 has no chains. They are built from its rooms, cards and messages in a
+  fixed order (`chain::import`) and end with an `import` entry. The stage moves a card went through before are not
+  in the old file, so only its stage at the upgrade is entered.
+
+What this is for: a member who saved a head can see that something at or before that head was later changed or
+removed. It does not stop the operator from changing the state file, from posting as a member, or from showing
+two members different histories, and an unsigned head proves nothing to a third party. The limits are listed in
+[THREAT-MODEL.md](THREAT-MODEL.md), "The room record".
 
 ## The gate
 
@@ -193,7 +233,12 @@ captured request up to 300 seconds old is accepted again. With a state file:
 - each accepted change is written out in full before the caller gets its answer: to a temporary file of mode
   0600 next to the target, which is synced and then renamed over the target, after which the directory is synced;
 - at start the file is loaded only if it is a regular file that group and others cannot read or write and that
-  parses in the expected format and version. Otherwise the board does not start, and it never rewrites the file;
+  parses in the expected format and in version 1 or 2. Otherwise the board does not start, and it never rewrites
+  the file;
+- version 2 holds each room's chain. Every chain must link, and there must be one for each room, or the board
+  does not start. A version 1 file (written by 0.2.0) has none: the chains are built from it in memory, the same
+  way at every start, and the file is written as version 2 with the first accepted change. The server of version
+  0.2.0 refuses a version 2 file, so keep a copy of the old file if you may want to go back;
 - nonces are not saved. Instead, after a restart the board refuses every request signed at or before the second it
   started. A request signed for a time ahead of the board's clock can still be accepted once more;
 - nothing locks the file. Two processes on one state file would overwrite each other.
@@ -206,6 +251,6 @@ directory it is in (0700, with umask 077 for the process), are the control. The 
 `/rooms/members/remove`, `/enroll-codes`, `/keys/activate` and `/keys/revoke`. None of them exists on the public
 listener, where their paths get the 401.
 
-`GET /state` shows organisations, rooms, which organisation holds which handle, every key with its fingerprint and
-status, and code metadata. It never shows a code. No operator route reads cards or messages, but the process holds
+`GET /state` shows organisations, rooms with the head of each room's chain, which organisation holds which handle,
+every key with its fingerprint and status, and code metadata. It never shows a code. No operator route reads cards or messages, but the process holds
 them in memory and the state file holds them in plain text.

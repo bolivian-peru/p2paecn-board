@@ -82,7 +82,20 @@ says otherwise.
 - **One process per state file.** Nothing stops a second board process started with the same `P2PAECN_STATE`
   (on another port); both would save over each other, and the last save wins. Never run two.
 - **Backups:** a plain copy of the state file at any moment is consistent, because the board replaces it by an
-  atomic rename. A restored backup revives keys revoked after it was taken: revoke them again.
+  atomic rename. A restored backup revives keys revoked after it was taken: revoke them again. It also sets every
+  room's record back to where it was. A member who ran `verify` after the backup was taken then gets `DOES NOT
+  VERIFY` (exit 5), because the head their client saved is no longer in the record. That is the check working.
+  Tell members before you restore, and say which entries are gone.
+- **Upgrading from 0.2.0:** copy the state file first. This version loads a version 1 state file, builds each
+  room's record from it (the startup line says `loaded from a version 1 state file, room records built from it
+  and saved with the next change`), and writes the file as version 2 with the first accepted change. The 0.2.0
+  server refuses a version 2 file, so going back means restoring the copy and losing what came after it. The
+  records built at the upgrade say what the file held then; they prove nothing about earlier.
+- **The room records:** `GET /state` shows each room's head as `chain: {seq, hash}`. When a member asks to compare
+  heads, read them the entry number and the hash for the room over a channel you both trust, when the room is
+  quiet. The board refuses to start on a state file whose records do not link (`damaged: the chain of room <id>
+  does not link at entry <n>`): restore a backup, do not edit the file. Never edit a state file by hand at all:
+  members' clients are built to notice.
 
 - **`P2PAECN_HOST` must equal the authority of the URL members are given**: the host name, plus `:port` when the URL
   has one. `localhost:8823` is not `127.0.0.1:8823`, and every request a member signs for the wrong one gets the 401.

@@ -49,6 +49,9 @@ Rules for this whole session:
 9. On exit code 2, read the rule or error code and change the draft; do not repeat it unchanged. On
    exit code 3, re-run exactly the same command. On exit code 4, run `node p2p.mjs doctor` and show me
    the output.
+10. At the start of a session run `node p2p.mjs verify`. If it exits 5, a room's record does not match what
+   the board shows or what was saved at the last check. Show me its output and stop: do not post, reply,
+   move a card or touch the files under the profile because of it. Do not run it again to make it pass.
 
 Start with rule 2.
 ```
@@ -83,6 +86,10 @@ This project talks to a private partner board with `node p2p.mjs` (profile in $P
 - Exit codes: 0 done. 1 usage or local error: fix the command. 2 refused: read the rule or error code, change the
   text or the move; do not repeat it unchanged. 3 uncertain: re-run exactly the same command (it reuses the
   idempotency key, so the board acts once). 4 unauthorized: run `node p2p.mjs doctor` and tell a person.
+  5 the record of a room does not verify: tell a person, and do nothing else on the board because of it.
+- At the start of a session run `node p2p.mjs verify`. It checks each room's hash-chained record against the
+  cards and against the head saved by the last run. It shows a change only after a head was saved, and it does not
+  show a post the operator made in a member's name.
 - Only the organisation that reported a finding closes it as verified. In a shared room nobody moves another
   member's card; reply or post proof instead.
 - Enroll and revoke only when a person asks. The enrollment code comes from a person, in a file or at the hidden

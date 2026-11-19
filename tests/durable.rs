@@ -3,6 +3,8 @@
 //! stops startup; a change that could not be saved is not acknowledged. Every example finding is invented.
 //! Each test runs its own board on a port the operating system picks.
 
+mod common;
+
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
@@ -577,4 +579,150 @@ fn without_a_state_file_the_board_says_it_keeps_nothing() {
     drop(s);
     let s = start(&dir, &[("P2PAECN_STATE", "")]);
     assert_eq!(s.op("GET", "/state", Value::Null).1["orgs"], json!([]));
+}
+
+// ---------------------------------------------------------------- the room records across versions and restarts
+
+/// A state file as version 0.2.0 wrote it (format version 1, no room records), made by running that version: a
+/// pair room `a-x` and a shared room `hub` with a removed member, findings in several stages, a notice with its
+/// ack, a correction. Its keys are test keys from the fixed seeds 41 to 45 and sign nothing outside these tests.
+const OLD_STATE: &[u8] = include_bytes!("fixtures/board-state-v1.json");
+
+fn put_state(dir: &Path, bytes: &[u8]) -> PathBuf {
+    let state = dir.join("state.json");
+    std::fs::write(&state, bytes).unwrap();
+    std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o600)).unwrap();
+    state
+}
+
+/// The whole record of a room, as bytes, and parsed.
+fn record(s: &Server, a: &Agent, room: &str) -> (Vec<u8>, Value) {
+    let (status, body) = s.get(a, &format!("/v1/rooms/{room}/chain?limit=1000"));
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    let parsed = json_of(&body);
+    (body, parsed)
+}
+
+/// Every card of a room with its thread.
+fn details(s: &Server, a: &Agent, room: &str) -> Vec<Value> {
+    let list = json_of(&s.get(a, &format!("/v1/rooms/{room}/cards?limit=100")).1);
+    list["cards"].as_array().unwrap().iter().map(|c| json_of(&s.get(a, &format!("/v1/cards/{}", c["id"].as_str().unwrap())).1)).collect()
+}
+
+#[test]
+fn a_state_file_from_before_the_records_loads_and_gives_the_same_records_at_every_start() {
+    let dir = scratch("upgrade");
+    let state = put_state(&dir, OLD_STATE);
+    let old: Value = serde_json::from_slice(OLD_STATE).unwrap();
+    assert_eq!((old["version"].clone(), old.get("chains")), (json!(1), None), "the fixture is of the old format");
+    let (supplier, reseller, fields) = (agent("supplier-a/agent", 41), agent("reseller-x/agent", 42), agent("reseller-x/loop", 44));
+
+    let s = start(&dir, &[]);
+    assert!(s.started.contains("loaded from a version 1 state file, room records built from it"), "{}", s.started);
+    let mut first = Vec::new();
+    for room in ["a-x", "hub"] {
+        let (bytes, parsed) = record(&s, &supplier, room);
+        let entries = parsed["entries"].as_array().unwrap();
+        // The record verifies against every card, message and stage the board shows.
+        assert_eq!(common::record_differs(room, &parsed["entries"], &details(&s, &supplier, room)), Vec::<String>::new(), "{room}");
+        assert_eq!(parsed["head"], json!({ "seq": entries.len(), "hash": entries.last().unwrap()["hash"] }));
+        // It ends with the import entry, which counts what stands before it.
+        let last = entries.last().unwrap();
+        let count = (entries.len() - 1).to_string();
+        assert_eq!((last["kind"].clone(), last["actor"].clone(), last["time"].clone()), (json!("import"), json!("*import"), json!(0)));
+        assert_eq!(last["payload"], json!(p2paecn_board::chain::Payload::Import { entries: &count }.hash()));
+        // Every key class of a member gets the same bytes.
+        assert_eq!(record(&s, &reseller, room).0, bytes);
+        assert_eq!(record(&s, &fields, room).0, bytes);
+        first.push(bytes);
+    }
+    let kinds = |parsed: &Value| -> Vec<(String, String)> {
+        parsed["entries"].as_array().unwrap().iter().map(|e| (e["kind"].as_str().unwrap().to_owned(), e["actor"].as_str().unwrap().to_owned())).collect()
+    };
+    let pairs = |list: &[(&str, &str)]| -> Vec<(String, String)> { list.iter().map(|(k, a)| (k.to_string(), a.to_string())).collect() };
+    assert_eq!(kinds(&record(&s, &supplier, "hub").1), pairs(&[
+        ("member-added", "*import"), ("member-added", "*import"), ("member-added", "*import"),
+        ("card", "member-2"), ("message", "member-1"), ("message", "member-2"),
+        ("card", "member-1"), ("card", "member-3"), ("message", "member-1"),
+        ("stage", "*import"), ("stage", "*import"),
+        ("member-removed", "*import"), ("import", "*import"),
+    ]));
+    assert_eq!(kinds(&record(&s, &supplier, "a-x").1).len(), 2 + 7 + 2 + 2 + 2 + 1, "members, the first thread, two more cards with a message each, two stages, the import entry");
+    let hub = String::from_utf8(first[1].clone()).unwrap();
+    for org in ["supplier-a", "reseller-x", "reseller-y", "/agent", "/loop"] {
+        assert!(!hub.contains(org), "{org} in the record of a shared room");
+    }
+    // Loading and reading wrote nothing: the file is the old one, byte for byte.
+    drop(s);
+    assert_eq!(std::fs::read(&state).unwrap(), OLD_STATE);
+
+    // A second start builds the same records: the same heads, the same bytes.
+    let s = start(&dir, &[]);
+    assert!(s.started.contains("version 1 state file"), "{}", s.started);
+    for (room, bytes) in ["a-x", "hub"].iter().zip(&first) {
+        assert_eq!(&record(&s, &supplier, room).0, bytes, "{room}");
+    }
+
+    // The first accepted change writes the file as version 2, records included, and appends after the import entry.
+    let before = record(&s, &supplier, "hub").1;
+    let (status, card) = s.post(&supplier, "/v1/rooms/hub/cards", json!({ "kind": "notice", "title": "Sample app fails to start on a clean install", "text": "Workaround in the thread." }));
+    assert_eq!(status, 201, "{card}");
+    let (after_bytes, after) = record(&s, &supplier, "hub");
+    let (old_entries, new_entries) = (before["entries"].as_array().unwrap(), after["entries"].as_array().unwrap());
+    assert_eq!(new_entries.len(), old_entries.len() + 1);
+    assert_eq!(&new_entries[..old_entries.len()], &old_entries[..]);
+    let added = new_entries.last().unwrap();
+    assert_eq!((added["kind"].clone(), added["actor"].clone(), added["prev"].clone()), (json!("card"), json!("member-1"), before["head"]["hash"].clone()));
+    drop(s);
+    let saved: Value = serde_json::from_slice(&std::fs::read(&state).unwrap()).unwrap();
+    assert_eq!(saved["version"], json!(2));
+    assert_eq!(saved["chains"]["hub"], after["entries"]);
+    assert_eq!(saved["chains"]["a-x"].as_array().map(Vec::len), Some(16));
+
+    // From now on the records come from the file.
+    let s = start(&dir, &[]);
+    assert!(s.started.contains("loaded from state file") && !s.started.contains("version 1"), "{}", s.started);
+    assert_eq!(record(&s, &supplier, "hub").0, after_bytes);
+    assert_eq!(record(&s, &supplier, "a-x").0, first[0]);
+    assert_eq!(common::record_differs("hub", &after["entries"], &details(&s, &supplier, "hub")), Vec::<String>::new());
+}
+
+#[test]
+fn a_state_file_whose_records_do_not_link_stops_startup() {
+    let dir = scratch("chains");
+    let state = dir.join("state.json");
+    let s = start(&dir, &[]);
+    populate(&s);
+    drop(s);
+    let good: Value = serde_json::from_slice(&std::fs::read(&state).unwrap()).unwrap();
+    assert_eq!(good["version"], json!(2));
+    assert!(good["chains"]["a-x"].as_array().unwrap().len() >= 6 && good["chains"]["hub"].is_array());
+
+    let edit = |change: &dyn Fn(&mut Value)| {
+        let mut v = good.clone();
+        change(&mut v);
+        v
+    };
+    let broken = [
+        ("an entry removed", edit(&|v| drop(v["chains"]["a-x"].as_array_mut().unwrap().remove(2))), "the chain of room a-x does not link at entry 3"),
+        ("an entry's time changed", edit(&|v| v["chains"]["a-x"][3]["time"] = json!(1)), "the chain of room a-x does not link at entry 4"),
+        ("an entry's actor changed", edit(&|v| v["chains"]["hub"][3]["actor"] = json!("member-1")), "the chain of room hub does not link at entry 4"),
+        ("the first entry dropped", edit(&|v| drop(v["chains"]["hub"].as_array_mut().unwrap().remove(0))), "the chain of room hub does not link at entry 1"),
+        ("no chain for a room", edit(&|v| drop(v["chains"].as_object_mut().unwrap().remove("hub"))), "the chains are not for exactly the rooms"),
+        ("no chains at all", edit(&|v| drop(v.as_object_mut().unwrap().remove("chains"))), "a version 2 file without chains"),
+        ("chains in a version 1 file", edit(&|v| v["version"] = json!(1)), "a version 1 file with chains"),
+        ("a later version", edit(&|v| v["version"] = json!(3)), "this server reads versions 1 and 2 only"),
+    ];
+    for (what, value, reason) in broken {
+        let bytes = value.to_string().into_bytes();
+        put_state(&dir, &bytes);
+        let (ok, err) = refuses_to_start(&dir, &[]);
+        assert!(!ok && err.contains("cannot load state file") && err.contains(reason) && err.contains("not started"), "{what}: {err}");
+        assert_eq!(std::fs::read(&state).unwrap(), bytes, "{what}: the file is left as it was");
+    }
+    // What the start does not catch, and a member's saved head does: the end cut off, with the cards left alone.
+    let cut = edit(&|v| drop(v["chains"]["a-x"].as_array_mut().unwrap().pop()));
+    put_state(&dir, cut.to_string().as_bytes());
+    let s = start(&dir, &[]);
+    assert!(s.started.contains("loaded from state file"), "{}", s.started);
 }

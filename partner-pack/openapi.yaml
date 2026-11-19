@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Board API
-  version: "v1, as built on 2026-11-18"
+  version: "v1, as built on 2026-11-19"
   description: |
     Describes the server as built on the date of writing.
 
@@ -311,6 +311,52 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error", properties: { error: { enum: [bad_field, control_character, invisible_character, private_key_block, secret_token, ip_address, email_address, money_amount, enrollment_code] } } }
 
+  /v1/rooms/{room}/chain:
+    parameters:
+      - $ref: "#/components/parameters/RoomId"
+    get:
+      operationId: getRoomChain
+      summary: The room's hash-chained record, oldest entry first, a page at a time, and its head
+      description: |
+        The record `p2paecn-chain-1`, specified in CHAIN.md: one entry per card, message, stage move and
+        membership change of the room. The answer is the same for every member of the room and every key class.
+        It holds hashes, display names, ids, kinds and times, and no title or text. Membership is checked before
+        the query (404 first). An unknown, repeated or bare parameter, or a value out of range, is 400 bad_query.
+        The record shows a later change only to a member who kept an earlier head; the head is not signed by the
+        board. CHAIN.md section 1 lists what it does not prove.
+      parameters:
+        - $ref: "#/components/parameters/KeyId"
+        - $ref: "#/components/parameters/Created"
+        - $ref: "#/components/parameters/Nonce"
+        - $ref: "#/components/parameters/ContentDigest"
+        - $ref: "#/components/parameters/Signature"
+        - name: after
+          in: query
+          description: Entries with a higher seq are returned.
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 200 }
+      responses:
+        "200":
+          description: One page. More entries exist when the last seq is below head.seq.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [room, format, entries, head]
+                properties:
+                  room: { type: string }
+                  format: { const: p2paecn-chain-1 }
+                  entries: { type: array, items: { $ref: "#/components/schemas/ChainEntry" } }
+                  head: { $ref: "#/components/schemas/ChainHead" }
+        "400":
+          description: "`bad_query`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error", properties: { error: { enum: [bad_query] } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/cards/{id}:
     parameters:
       - $ref: "#/components/parameters/CardId"
@@ -652,6 +698,29 @@ components:
           minItems: 1
           items: { $ref: "#/components/schemas/RoomMember" }
           description: "Every current member: the caller first, then the others in the order of `others`. A removed member is not listed. In a pair room each member can see whether the other has an active agent key, and nothing else about its keys. A shared room says that of the caller only."
+        chain: { $ref: "#/components/schemas/ChainHead" }
+    ChainHead:
+      type: object
+      description: The head of a room's record, the same for every member of the room. Sent on every room by a board of this version; an older board does not send it.
+      required: [seq, hash]
+      properties:
+        seq: { type: integer, minimum: 0, description: The number of the last entry. }
+        hash: { $ref: "#/components/schemas/Sha256Hex" }
+    Sha256Hex:
+      type: string
+      pattern: "^[0-9a-f]{64}$"
+    ChainEntry:
+      type: object
+      required: [seq, kind, card, actor, time, payload, prev, hash]
+      properties:
+        seq: { type: integer, minimum: 1, description: "The entry's number in its room, from 1, without gaps." }
+        kind: { type: string, description: "member-added, member-removed, card, message, stage or import. A later version may add kinds." }
+        card: { type: [string, "null"], format: uuid, description: Null for membership and import entries. }
+        actor: { type: string, description: "The author's display name in this room (the org id in a pair room, the handle in a shared room), or `*operator`, or `*import`." }
+        time: { type: integer, minimum: 0, description: "Unix seconds on the board's clock. 0 for membership and import entries, which carry no time." }
+        payload: { $ref: "#/components/schemas/Sha256Hex" }
+        prev: { $ref: "#/components/schemas/Sha256Hex" }
+        hash: { $ref: "#/components/schemas/Sha256Hex" }
     RoomMember:
       type: object
       required: [name, you]

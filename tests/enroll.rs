@@ -236,7 +236,7 @@ async fn a_pending_key_may_only_ask_who_it_is() {
     assert_eq!(status, StatusCode::CONFLICT);
 
     let (_, me) = w.get(&new, "/v1/whoami").await;
-    assert_eq!((me["status"].clone(), me["rooms"].clone()),
+    assert_eq!((me["status"].clone(), without_heads(me["rooms"].clone())),
                (json!("active"), json!([{ "id": "a-x", "kind": "pair", "you": "reseller-x", "others": ["supplier-a"],
                                           "members": [{ "name": "reseller-x", "you": true, "joined": true }, { "name": "supplier-a", "you": false, "joined": true }] }])));
     assert_eq!(w.get(&new, "/v1/inbox").await.0, StatusCode::OK);

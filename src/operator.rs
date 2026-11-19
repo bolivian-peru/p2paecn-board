@@ -5,7 +5,7 @@
 //! The operator creates organisations and rooms, issues one-time enrollment codes, and activates a pending key
 //! only after a person on the member's side has read its fingerprint over a channel both already trust.
 
-use crate::api::{now_unix, refuse, reply, MAX_BODY};
+use crate::api::{head_view, now_unix, refuse, reply, MAX_BODY};
 use crate::store::{EnrollCode, KeyStatus, Refusal, RoomKind, Store, NOT_FOUND};
 use crate::{sig, store, KeyClass, Shared};
 use axum::body::Bytes;
@@ -118,7 +118,8 @@ fn lock(s: &Shared) -> MutexGuard<'_, Store> {
 
 // ---------------------------------------------------------------- routes
 
-/// Everything the operator needs to see, never an enrollment code itself.
+/// Everything the operator needs to see, never an enrollment code itself. Each room carries the head of its chain,
+/// so that the operator can read it to a member who wants to compare it with the one their client saved.
 async fn state(State(s): App) -> Response {
     let store = lock(&s);
     let rooms: Vec<Value> = store
@@ -127,7 +128,7 @@ async fn state(State(s): App) -> Response {
         .map(|r| {
             let members: Vec<Value> =
                 r.members.iter().map(|m| json!({ "org": m.org, "handle": m.handle, "removed": m.removed })).collect();
-            json!({ "id": r.id, "kind": r.kind.as_str(), "members": members })
+            json!({ "id": r.id, "kind": r.kind.as_str(), "members": members, "chain": head_view(&store, &r.id) })
         })
         .collect();
     let keys: Vec<Value> = store
