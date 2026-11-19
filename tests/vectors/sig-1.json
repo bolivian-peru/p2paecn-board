@@ -1,0 +1,55 @@
+{
+  "scheme": "p2paecn-sig-1",
+  "keyId": "reseller-x/agent-1",
+  "publicKeyB64Url": "Qub4Sn_4S1KyQedZRWqJnC2l553ao2Lle5DTaEpy8Z0",
+  "fingerprint": "4093-b9c1-0e7f-d66e-341a",
+  "nowUnix": 1794850000,
+  "cases": [
+    {
+      "name": "get-no-body",
+      "method": "GET",
+      "host": "board.test",
+      "pathAndQuery": "/v1/inbox",
+      "body": "",
+      "headers": {
+        "p2p-key-id": "reseller-x/agent-1",
+        "p2p-created": "1794850000",
+        "p2p-nonce": "AAAAAAAAAAAAAAAAAAAAAAAA",
+        "content-digest": "sha-256=:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=:",
+        "p2p-signature": "yX9kd0cQCjwjqMPm2SOtNKhcurzRqzvdVEVCx_cyHKbq2X5QCTjMbnvABkXIqKoTvBItFWpw2saCDJRJKsb6Dg"
+      },
+      "canonical": "p2paecn-sig-1\nGET\nboard.test\n/v1/inbox\n1794850000\nAAAAAAAAAAAAAAAAAAAAAAAA\nreseller-x/agent-1\nsha-256=:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=:\n-"
+    },
+    {
+      "name": "get-with-query",
+      "method": "GET",
+      "host": "board.test",
+      "pathAndQuery": "/v1/rooms/room-a/cards?stage=shipped&limit=5",
+      "body": "",
+      "headers": {
+        "p2p-key-id": "reseller-x/agent-1",
+        "p2p-created": "1794850000",
+        "p2p-nonce": "BBBBBBBBBBBBBBBBBBBBBBBB",
+        "content-digest": "sha-256=:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=:",
+        "p2p-signature": "yrPMe4yKjz2iaQ5JxiHXgGWkXpht5MFCMgKEpZx4qMNuBXkDupCfjBweb7XlA8m6uvKVDlDt0aDa3saAD_eTAA"
+      },
+      "canonical": "p2paecn-sig-1\nGET\nboard.test\n/v1/rooms/room-a/cards?stage=shipped&limit=5\n1794850000\nBBBBBBBBBBBBBBBBBBBBBBBB\nreseller-x/agent-1\nsha-256=:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=:\n-"
+    },
+    {
+      "name": "post-with-body",
+      "method": "POST",
+      "host": "board.test",
+      "pathAndQuery": "/v1/rooms/room-a/cards",
+      "body": "{\"kind\":\"finding\",\"severity\":\"wrong\",\"title\":\"List endpoint skips one item when paging\",\"text\":\"Page two starts one item late. Ünïcode ok.\"}",
+      "headers": {
+        "p2p-key-id": "reseller-x/agent-1",
+        "p2p-created": "1794850000",
+        "p2p-nonce": "CCCCCCCCCCCCCCCCCCCCCCCC",
+        "content-digest": "sha-256=:y+XLE36IaGObGPYR7AI+iqiOHnYy2/jJsaIR2Xgakxg=:",
+        "p2p-signature": "2AxKpJg73NrkL0fYNziwXzsK9FrR-Y9ImwhwnvnslpkyxSnDoxjGDBuF5o4rKgrcroZUxRwSAAwKHtLORwYrAg",
+        "idempotency-key": "5f0c1c0e-7b1f-4c58-9d55-3f6a1f0f9a11"
+      },
+      "canonical": "p2paecn-sig-1\nPOST\nboard.test\n/v1/rooms/room-a/cards\n1794850000\nCCCCCCCCCCCCCCCCCCCCCCCC\nreseller-x/agent-1\nsha-256=:y+XLE36IaGObGPYR7AI+iqiOHnYy2/jJsaIR2Xgakxg=:\n5f0c1c0e-7b1f-4c58-9d55-3f6a1f0f9a11"
+    }
+  ]
+}

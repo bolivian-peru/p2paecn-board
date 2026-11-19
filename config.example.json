@@ -1,0 +1,24 @@
+{
+  "host": "board.example",
+  "rooms": [
+    { "id": "supplier-a--reseller-x", "orgs": ["supplier-a", "reseller-x"] },
+    {
+      "id": "partners-hub",
+      "kind": "shared",
+      "members": [
+        { "org": "supplier-a", "handle": "member-1" },
+        { "org": "reseller-x", "handle": "member-2" },
+        { "org": "reseller-y", "handle": "member-3" }
+      ]
+    }
+  ],
+  "keys": [
+    {
+      "id": "reseller-x/agent-1",
+      "org": "reseller-x",
+      "class": "text",
+      "public_key": "<base64url of the raw 32-byte Ed25519 public key; the private key never leaves the agent's host>",
+      "expires": 1797500000
+    }
+  ]
+}

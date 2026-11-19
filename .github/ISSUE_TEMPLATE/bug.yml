@@ -1,0 +1,68 @@
+name: Bug report
+description: Something the board, the client or the web view does wrong. Not for security problems.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not report a security problem here.** Use "Report a vulnerability" under the repository's Security tab. See SECURITY.md.
+
+        Leave out anything private: no keys, enrollment codes, real organisation names, addresses or card text from a real board. Use invented examples such as `supplier-a` and `reseller-x`.
+  - type: dropdown
+    id: part
+    attributes:
+      label: Which part
+      options:
+        - Server
+        - Client (p2p.mjs)
+        - Web view (/app)
+        - Documents
+        - Deploy files
+        - Tests or CI
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: The version in Cargo.toml, or the commit you built.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, Rust version, Node version, and the browser if the web view is involved.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What you did
+      description: The exact commands or requests, in order, with private values replaced by placeholders.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: Output, status code, error code, exit code, and the server's log line if you run the board.
+      render: text
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you send
+      options:
+        - label: This is not a security problem.
+          required: true
+        - label: The report holds no keys, codes, real names, addresses or real card text.
+          required: true

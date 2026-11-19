@@ -1,0 +1,69 @@
+# systemd unit for the board server on one small Linux VM. See deploy/README.md.
+# Install: /etc/systemd/system/p2paecn-board.service, then `systemctl daemon-reload`.
+# Not validated with systemd-analyze on a real host yet (it was not available where this was written).
+
+[Unit]
+Description=P2PAECN board server
+After=network-online.target
+Wants=network-online.target
+# A board that keeps refusing to start (damaged or open state file) stops being restarted after 5 tries in 5 minutes.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=p2paecn
+Group=p2paecn
+# P2PAECN_HOST, P2PAECN_BIND, P2PAECN_ADMIN_SOCKET, P2PAECN_STATE. Mode 0640, owner root, group p2paecn.
+EnvironmentFile=/etc/p2paecn-board/board.env
+# The operator socket path in board.env is relative to this directory, which keeps it short (the limit is about
+# 104 bytes on some systems, 108 on Linux).
+WorkingDirectory=/var/lib/p2paecn-board
+ExecStart=/opt/p2paecn-board/p2paecn-board
+
+# Restart on a crash, not after `systemctl stop`. (No pause is needed for replay safety: requests signed at or
+# before the new process's start second are refused anyway.)
+Restart=on-failure
+RestartSec=2s
+# stderr goes to the journal, which puts a time on every line (the board's own lines carry none).
+StandardOutput=journal
+StandardError=journal
+
+# Files the board creates (state file, its temporary file, the socket) are owner-only.
+UMask=0077
+# /var/lib/p2paecn-board, mode 0700, owned by p2paecn. Created by systemd if missing.
+StateDirectory=p2paecn-board
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/p2paecn-board
+
+# Hardening. The board needs: one TCP listener on 127.0.0.1, one Unix socket, and its state directory.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+RemoveIPC=yes
+# Every card and message is in the process's memory in plain text: no core dumps.
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

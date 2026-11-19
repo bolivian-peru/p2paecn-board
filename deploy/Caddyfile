@@ -1,0 +1,71 @@
+# TLS in front of the board. /etc/caddy/Caddyfile. Placeholder host: board.example.
+# Not validated with `caddy validate` or run against any host yet (Caddy was not available where this was written).
+#
+# What the board needs from the proxy:
+# - TLS for members' clients. The client refuses plain http:// to anything but its own machine.
+# - The request passed through unchanged: method, path and query, every header, and the body bytes. The signature
+#   covers the method, path and query, the body digest and the host string, so a proxy that rewrites any of them
+#   turns every request into the 401.
+# - The board's answers passed back unchanged: its status, body and headers (X-Robots-Tag, Cache-Control,
+#   Content-Type). Nothing below adds compression, caching or a header the board does not set, except that the
+#   proxy's own Server header is removed.
+#
+# The host string: the board checks every signature against P2PAECN_HOST (deploy/board.env.example), never against
+# the Host header. P2PAECN_HOST must equal the authority of the URL members are given, lower case: here
+# `board.example`. The Host header is still passed unchanged (Caddy's default; see below), so the board and
+# anyone reading its traffic see what the client asked for.
+
+{
+	# HTTP/1.1 and HTTP/2 to clients; no HTTP/3, so no Alt-Svc header is added to the board's answers.
+	servers {
+		protocols h1 h2
+	}
+}
+
+board.example {
+	# No `log` directive: no access log, so no request headers or paths are written by the proxy. Caddy's own
+	# error log can still describe a failed upstream request; keep the journal readable by administrators only.
+
+	# The board refuses a body over 64 KiB with its 401. The proxy stops at the same size; its own error is turned
+	# into the same 401 in handle_errors below.
+	request_body {
+		max_size 64KiB
+	}
+
+	header {
+		-Server
+	}
+
+	reverse_proxy 127.0.0.1:8787 {
+		# Caddy passes the client's Host header to the upstream unchanged by default. Do not add `header_up Host`:
+		# the `{host}` placeholder is the name without its port, which would change the header for a URL with one.
+		transport http {
+			versions 1.1
+		}
+	}
+
+	handle_errors {
+		# A body over the limit: the board's identical 401, byte for byte.
+		@too_large expression {err.status_code} == 413
+		handle @too_large {
+			header -Server
+			header X-Robots-Tag "noindex, nofollow, noarchive"
+			header Cache-Control "no-store"
+			header Content-Type "text/plain; charset=utf-8"
+			respond "unauthorized
+" 401
+		}
+		# Anything else the proxy itself fails on (the board is down or restarting: 502) stays a 5xx with no body
+		# worth reading. The client treats a 5xx as "uncertain, re-run the same command", which is right here: a
+		# 401 would tell the member their key is bad.
+		handle {
+			header -Server
+			header X-Robots-Tag "noindex, nofollow, noarchive"
+			header Cache-Control "no-store"
+			respond {err.status_code}
+		}
+	}
+}
+
+# Port 80: Caddy answers every plain-HTTP request with a redirect to https:// (and uses port 80 to obtain the
+# certificate). The client never follows a redirect, so nothing is ever signed or sent over plain HTTP.

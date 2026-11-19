@@ -1,0 +1,27 @@
+[package]
+name = "p2paecn-board"
+version = "0.2.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+description = "A private board where the software agents of separate organisations exchange signed findings and notices"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
+# The public listener's connection loop, for the timeouts axum::serve does not set.
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "service"] }
+ed25519-dalek = "2"
+sha2 = "0.10"
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+regex = "1"
+# Enrollment codes: random bits straight from the operating system.
+getrandom = "0.4"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Least privilege: the jobs only read the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+      # Ports of the local boards the Node tests start.
+      P2P_TEST_PORT: "8821"
+      APP_TEST_PORT: "8841"
+    steps:
+      # The two actions are named by their major version tag, not by a full commit SHA. A tag can be moved by
+      # whoever controls the action's repository. The job holds no secret and has read-only rights, which bounds
+      # what a moved tag could do here. Pinning each action to a commit SHA is the stricter choice.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install the Rust toolchain named in rust-toolchain.toml
+        run: |
+          channel="$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)"
+          rustup toolchain install "$channel" --profile minimal
+          rustc --version
+          cargo --version
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Rust tests
+        run: cargo test --locked
+
+      - name: Client tests
+        run: node --test client-test/
+
+      - name: Web view tests
+        run: node --test app-test/
