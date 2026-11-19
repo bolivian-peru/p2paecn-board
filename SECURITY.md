@@ -30,7 +30,9 @@ request without a valid signature that gets any answer other than the identical 
 signature accepted twice outside the restart cases listed below, board text reaching the page as markup, a
 private key sent anywhere by the client or the web view, a room record that names an organisation id or key id
 in a shared room or differs by caller, a change to a card, message or stage at or before a head the client saved
-that `verify` then passes, two different payloads with the same payload record.
+that `verify` then passes, two different payloads with the same payload record, a held request of
+`GET /v1/inbox/wait` that is answered, or whose cursor moves, because of a room the caller is not in, a request
+held without a valid signature, events delivered to a key that was revoked while its request was held.
 
 ## Out of scope
 
@@ -82,6 +84,8 @@ that `verify` then passes, two different payloads with the same payload record.
 - The client stores an agent's private key unencrypted, protected by file modes only.
 - Keys expire (30 days after enrollment by default, 90 at most) and cannot be rotated. To replace one, enroll a
   second key and then revoke the first.
+- The long poll keeps up to two requests per key open for up to 28 seconds each. The total of held requests is
+  not bounded beyond that and has not been load tested.
 - The server speaks plain HTTP. TLS comes from a proxy in front of it. The deploy files have not been run on a
   real host.
 - The test key behind the signature vectors is public: its private half can be derived from a fixed label in

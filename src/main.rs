@@ -7,6 +7,7 @@ use std::sync::Arc;
 /// P2PAECN_CONFIG: optional bootstrap JSON (host, rooms, keys), read once at start; with a state file, only when
 /// the state file does not exist yet.
 /// P2PAECN_STATE: optional path of the state file. Unset: memory only, everything is lost on restart.
+/// P2PAECN_WAIT_SECONDS: the longest `GET /v1/inbox/wait` holds a request, 1 to 28, default 25.
 /// P2PAECN_LIMIT_KEY_REQUESTS, P2PAECN_LIMIT_KEY_WRITES, P2PAECN_LIMIT_ROOM_WRITES, P2PAECN_LIMIT_UNSIGNED,
 /// P2PAECN_LIMIT_WINDOW_SECONDS, P2PAECN_SOURCE_HEADER: the rate limits (src/rate.rs).
 #[tokio::main]
@@ -19,6 +20,14 @@ async fn main() {
     let (mut shared, source) =
         Shared::open(host, env("P2PAECN_CONFIG").map(Into::into), state, start).unwrap_or_else(|e| fail(&e));
     shared.limits = rate::Limiter::new(rate::Config::from_env(env).unwrap_or_else(|e| fail(&e)));
+    if let Some(value) = env("P2PAECN_WAIT_SECONDS") {
+        let range = 1..=p2paecn_board::WAIT_CAP_MAX;
+        shared.wait_cap = value
+            .parse()
+            .ok()
+            .filter(|n| range.contains(n))
+            .unwrap_or_else(|| fail(&format!("P2PAECN_WAIT_SECONDS must be a whole number from 1 to {}", p2paecn_board::WAIT_CAP_MAX)));
+    }
     let storage = match (&source, &shared.state) {
         (Source::Memory, _) | (_, None) => "in-memory store: every organisation, room, key and card is lost on restart".to_owned(),
         (source, Some(path)) => {

@@ -228,6 +228,76 @@ paths:
               schema: { $ref: "#/components/schemas/Inbox" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /v1/inbox/wait:
+    get:
+      operationId: waitForNews
+      summary: A long poll for what is new in the caller's rooms
+      description: |
+        Answers at once when there is an event after the cursor in `after`, or when no cursor is sent (then with
+        the cursor to start from). Otherwise the request is held until an event arrives or `wait` seconds have
+        passed (at most the board's cap, 25 seconds by default, 28 at most), and then answered with no events and
+        `timedOut: true`. An event is an entry of a room's record without its hashes; entries made by the caller's
+        own organisation are passed over. At most two requests of one key are held at a time. A held request
+        counts as one request against the key's rate limit. A request without a valid signature is never held,
+        and a key revoked or expired while its request is held gets the 401 and no events. `GET /v1/inbox` is
+        unchanged.
+      parameters:
+        - $ref: "#/components/parameters/KeyId"
+        - $ref: "#/components/parameters/Created"
+        - $ref: "#/components/parameters/Nonce"
+        - $ref: "#/components/parameters/ContentDigest"
+        - $ref: "#/components/parameters/Signature"
+        - name: after
+          in: query
+          description: "The `cursor` of an earlier answer: `-`, or `<room>.<seq>` parts joined by `_`."
+          schema: { type: string, pattern: "^(-|[a-z0-9-]{3,64}\\.[0-9]{1,15}(_[a-z0-9-]{3,64}\\.[0-9]{1,15})*)$" }
+        - name: wait
+          in: query
+          description: Seconds to hold the request. More than the board's cap is cut to the cap. 0 is never held.
+          schema: { type: integer, minimum: 0, maximum: 9999 }
+        - name: room
+          in: query
+          description: Only this room. A cursor belongs to calls with the same `room`.
+          schema: { type: string, pattern: "^[a-z0-9-]{3,64}$" }
+      responses:
+        "200":
+          description: Events, or none when the time was up or no cursor was sent.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events, cursor, more, timedOut, wait]
+                properties:
+                  events:
+                    type: array
+                    maxItems: 100
+                    items:
+                      type: object
+                      required: [room, seq, kind, card, actor, time]
+                      properties:
+                        room: { type: string }
+                        seq: { type: integer, minimum: 1 }
+                        kind: { type: string, description: "A kind of ChainEntry." }
+                        card: { type: [string, "null"], format: uuid }
+                        actor: { type: string, description: "A display name of the room, `*operator` or `*import`." }
+                        time: { type: integer, minimum: 0 }
+                  cursor: { type: string, description: Send it as `after` next time. It names the caller's own rooms only. }
+                  more: { type: boolean, description: True when more than 100 events were waiting. }
+                  timedOut: { type: boolean }
+                  wait: { type: integer, description: The seconds this request was allowed to be held. }
+        "400":
+          description: "`bad_query`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error", properties: { error: { enum: [bad_query] } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`too_many_waits`: this key already has two requests held."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error", properties: { error: { enum: [too_many_waits] } } }
+        "429": { $ref: "#/components/responses/RateLimited" }
   /v1/rooms/{room}/cards:
     parameters:
       - $ref: "#/components/parameters/RoomId"

@@ -71,6 +71,10 @@ honest about what it cannot see inside a file, and a decision on whether a `fiel
 
 ## Also wanted
 
+- For the long poll (`GET /v1/inbox/wait`, built): a bound on the total of held requests, a run through a real
+  TLS proxy, and a cursor the client keeps between runs so that `wait` also reports what arrived while it was
+  not running.
+
 - Exports of a room for its members.
 - A way to cancel an unused enrollment code.
 - A way for a member to leave a pair room.

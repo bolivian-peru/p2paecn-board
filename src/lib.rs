@@ -61,7 +61,18 @@ pub struct Shared {
     /// The rate limits and their counts (`src/rate.rs`). A board built in code has none; the server binary sets
     /// them from the environment.
     pub limits: rate::Limiter,
+    /// Woken after every accepted change, for the requests held by `GET /v1/inbox/wait`.
+    pub changed: tokio::sync::Notify,
+    /// Key id -> how many of its requests `GET /v1/inbox/wait` is holding now.
+    pub waits: Mutex<std::collections::HashMap<String, usize>>,
+    /// The longest `GET /v1/inbox/wait` holds a request, in seconds (`P2PAECN_WAIT_SECONDS`).
+    pub wait_cap: u64,
 }
+
+/// What `wait_cap` is unless set.
+pub const WAIT_CAP_DEFAULT: u64 = 25;
+/// The most `wait_cap` can be set to: under the 30 seconds within which every request is answered.
+pub const WAIT_CAP_MAX: u64 = 28;
 
 /// A change that could not be saved: it is undone and not acknowledged.
 pub const NOT_SAVED: Refusal = (StatusCode::INTERNAL_SERVER_ERROR, "state_not_saved");
@@ -112,9 +123,22 @@ struct Config {
 }
 
 impl Shared {
+    fn with_store(host: String, store: Store) -> Self {
+        Shared {
+            host,
+            store: Mutex::new(store),
+            state: None,
+            not_before: None,
+            limits: rate::Limiter::default(),
+            changed: tokio::sync::Notify::new(),
+            waits: Mutex::new(std::collections::HashMap::new()),
+            wait_cap: WAIT_CAP_DEFAULT,
+        }
+    }
+
     /// An empty board: no organisations, rooms or keys until the operator adds them.
     pub fn new(host: String) -> Self {
-        Shared { host, store: Mutex::new(Store::default()), state: None, not_before: None, limits: rate::Limiter::default() }
+        Shared::with_store(host, Store::default())
     }
 
     /// The board a process starts with. Without `state`: the bootstrap config, or an empty board, in memory only,
@@ -138,7 +162,7 @@ impl Shared {
         let (mut shared, source) = match state::load(&path).map_err(|e| format!("{e}; the board is not started and the file is left as it is"))? {
             Some((store, saved_host, chains_built)) => {
                 let host = host.or(Some(saved_host)).filter(|h| !h.is_empty()).ok_or("the state file holds no host: set P2PAECN_HOST")?;
-                let shared = Shared { host, store: Mutex::new(store), state: None, not_before: None, limits: rate::Limiter::default() };
+                let shared = Shared::with_store(host, store);
                 (shared, Source::Loaded { config_ignored: config.is_some(), chains_built })
             }
             None => {
@@ -167,10 +191,15 @@ impl Shared {
     /// nobody reads a change that is not yet saved.
     pub fn commit(&self, store: &mut Store, before: Option<Store>) -> Result<(), Refusal> {
         let (Some(path), Some(before)) = (&self.state, before) else {
+            self.changed.notify_waiters();
             return Ok(());
         };
         match state::save(path, store, &self.host) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                // Held requests look again once the caller of `commit` lets go of the store.
+                self.changed.notify_waiters();
+                Ok(())
+            }
             Err(e) => {
                 eprintln!("state not saved to {}: {e}; the change is undone and answered with 500 state_not_saved", path.display());
                 store.restore(before);
@@ -227,6 +256,6 @@ impl Shared {
                 return Err(format!("key {}: listed twice", k.id));
             }
         }
-        Ok(Shared { host, store: Mutex::new(store), state: None, not_before: None, limits: rate::Limiter::default() })
+        Ok(Shared::with_store(host, store))
     }
 }

@@ -45,7 +45,8 @@ This describes the code as it is in this repository. The API in full is in
 | Web view | `src/app.html`, `src/app.js`, `src/app.css` | Compiled into the binary and served as static files |
 | Client | `partner-pack/p2p.mjs` | One file for Node 18 or later with no dependencies |
 
-There is no database, no background job, no outgoing network call and no template engine. The server depends on
+There is no database, no background job, no outgoing network call and no template engine. The one thing that
+outlives a request's own work is a request held by the long poll (see "Waiting for news"). The server depends on
 axum, tokio, hyper, ed25519-dalek, sha2, base64, serde, uuid, regex and getrandom. The room record added no
 dependency.
 
@@ -182,6 +183,27 @@ What this is for: a member who saved a head can see that something at or before 
 removed. It does not stop the operator from changing the state file, from posting as a member, or from showing
 two members different histories, and an unsigned head proves nothing to a third party. The limits are listed in
 [THREAT-MODEL.md](THREAT-MODEL.md), "The room record".
+
+## Waiting for news
+
+`GET /v1/inbox/wait` is a long poll (`inbox_wait` in `src/api.rs`). There is still no background job and no
+outgoing call: a held request is a task that sleeps.
+
+- **Cursor.** For each room of the caller, the entry number of that room's record the caller has seen:
+  `<room>.<seq>` parts joined by `_`. It is made from the caller's own rooms only, so it cannot reveal activity
+  anywhere else. Room names in a cursor that are not the caller's rooms are ignored.
+- **Events.** Entries of those records after the cursor, without their hashes, skipping the entries the caller's
+  own organisation made. At most 100 per answer.
+- **Holding.** After the signature check, the handler looks for events. If there are none and a cursor was sent,
+  it takes one of the key's two places and sleeps until `Shared::changed` is notified or the deadline passes.
+  `Shared::commit` notifies after every accepted change, on the public routes and on the operator channel. On
+  each wake-up the handler checks the key again (still active and not expired, else the 401), checks the room
+  again when one was named, and looks for events. Other rooms' changes wake it too; it finds nothing and sleeps
+  again, and nothing of that is visible to the caller.
+- **Bounds.** The cap is `P2PAECN_WAIT_SECONDS`, 25 by default and 28 at most, because every request is answered
+  within 30 seconds. Two held requests per key; a third is `409 too_many_waits`. A held request counts as one
+  request against the key's rate limit when it arrives. The place is given back when the request ends, also
+  when the caller goes away.
 
 ## Rate limits
 

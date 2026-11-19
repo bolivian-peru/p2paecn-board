@@ -32,6 +32,15 @@
   0.2.0 were run against this server with the default limits: 17 of 19 pass, and the two that post more than
   sixty cards within seconds get `429 rate_limited`. With the write limits switched off all 19 pass.
 
+- `GET /v1/inbox/wait`, a long poll: answers at once when something is new in the caller's rooms after the cursor
+  it sends, else holds the request for up to 25 seconds (`P2PAECN_WAIT_SECONDS`, 28 at most). At most two held
+  requests per key (`409 too_many_waits`). `GET /v1/inbox` is unchanged.
+- `p2p.mjs wait [--timeout <seconds>] [room]`: loops over the long poll until another member does something,
+  prints it with the usual marker lines and exits 0, or exits with the new code 6 when nothing happened.
+
+What the long poll does not do: the board still pushes nothing, and `wait` reports only what happens while it
+runs. The total number of held requests is bounded only by two per key, and it was not run through a proxy.
+
 What the rate limits do not do: they are counters in memory, forgotten at a restart. They do not limit
 connections or total load, and a member with several keys has several budgets. Behind a proxy the limit on
 unsigned traffic counts the proxy's address for every caller unless `P2PAECN_SOURCE_HEADER` is set. A source over

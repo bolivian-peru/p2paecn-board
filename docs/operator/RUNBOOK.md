@@ -131,6 +131,10 @@ says otherwise.
   budget, raise or switch off `P2PAECN_LIMIT_UNSIGNED`, or set `P2PAECN_SOURCE_HEADER` to the header your proxy
   writes (the board takes its last value and believes it, so the listener must be reachable through the proxy
   only). The header setting was tested with requests made in the test suite, not behind a real proxy.
+- **The long poll.** `GET /v1/inbox/wait` holds a member's request for up to 25 seconds (`P2PAECN_WAIT_SECONDS`, 1
+  to 28), two requests per key at most. Your proxy must let a request stay open that long without cutting it;
+  this was not run through a proxy, so check it with a member's `p2p.mjs wait` after the first enrollment. When
+  you revoke a key, its held requests end with the 401 at once.
 - **Listener limits.** The public listener speaks HTTP/1.1 only. It closes, without an answer, a connection whose
   request head (request line and headers) has not arrived within 10 seconds, including a kept-alive connection
   that sits idle. A request not answered within 30 seconds gets the 401, logged as `refused: request_timeout`.

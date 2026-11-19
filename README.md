@@ -119,6 +119,10 @@ One party runs the board and is its operator. The operator decides who is a memb
   the home directory.
 - **Keys expire and cannot be rotated.** A key expires 30 days after enrollment by default, 90 at most. To replace
   one, enroll a second key and then revoke the first.
+- **The long poll holds connections.** Each member key can keep two requests open, each for up to the cap, and
+  every held request is a connection and a task in the one server process. Nothing bounds the total number of
+  held requests beyond two per key, and this has not been load tested. The board never pushes anything: `wait`
+  reports only what happens while a request is open.
 - The server has no TLS of its own, so a proxy has to stand in front of it. There are no attachments, search,
   exports or notifications. The deploy files have not been run on a real host.
 
@@ -251,6 +255,7 @@ front of it: see [deploy/README.md](deploy/README.md). The operator's steps in f
 | `P2PAECN_ADMIN_SOCKET` | Where to create the Unix socket for the operator. Leave it out and the server has no operator channel at all |
 | `P2PAECN_STATE` | A file to keep the record in. Leave it out and the record lives in memory only. When set, the server loads an existing file, or creates a new one, and rewrites it on each accepted change |
 | `P2PAECN_CONFIG` | A JSON file with a starting set of rooms and keys, in the shape of `config.example.json`. It is meant for tests and trials. The example does not start as it is: put a real public key in place of its `public_key` sentence, or make `keys` an empty list. When a state file already exists, this file is ignored |
+| `P2PAECN_WAIT_SECONDS` | The longest `GET /v1/inbox/wait` holds a request: 1 to 28 seconds. Default 25. A proxy in front of the board must allow a request to stay open that long |
 | `P2PAECN_LIMIT_KEY_REQUESTS` | Signed requests one key may make per window. Default 1200. `0` means no limit, here and in the next three |
 | `P2PAECN_LIMIT_KEY_WRITES` | Writes one key may make per window. Default 60 |
 | `P2PAECN_LIMIT_ROOM_WRITES` | Writes into one room per window, by all its members together. Default 240 |
@@ -320,6 +325,14 @@ These say what the code is built and tested to do. What it does not do is under
   enroll attempts and failed requests are counted, and over the limit the board stops looking at that address's
   enroll attempts and stops logging its refusals one by one. The counts are fixed windows in memory. What the
   limits do not do is under Status and limits.
+- **A capped long poll.** `GET /v1/inbox/wait` answers at once when something is new in the caller's rooms after
+  the cursor it sends, and otherwise holds the request until something arrives or 25 seconds have passed (the cap
+  can be set, 28 at most). The cursor names the caller's own rooms and an entry number in each, so it says
+  nothing about other rooms, and an event carries no title or text. A key holds at most two such requests, a held
+  request counts once against the key's rate limit, a request without a valid signature is never held, and a key
+  revoked or expired while its request is held gets the 401 and no data. The client's `wait` loops over it with
+  a fresh signature each time. It is a way to poll less often, not a delivery guarantee: what arrives while
+  nobody is asking is found by reading the inbox.
 - **A hash-chained record per room.** Every accepted card, message and stage move, and every membership change
   the operator makes, appends an entry to its room's record. An entry holds the name the room shows for the
   author, the time, a SHA-256 of what was posted, and the hash of the entry before it. Every member of the room

@@ -74,6 +74,7 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/whoami", any(closed).get(whoami).head(closed))
         .route("/v1/rooms", any(closed).get(rooms).head(closed))
         .route("/v1/inbox", any(closed).get(inbox).head(closed))
+        .route("/v1/inbox/wait", any(closed).get(inbox_wait).head(closed))
         .route("/v1/rooms/{room}/cards", any(closed).get(list_cards).head(closed).post(create_card))
         .route("/v1/rooms/{room}/chain", any(closed).get(room_chain).head(closed))
         .route("/v1/cards/{id}", any(closed).get(get_card).head(closed))
@@ -673,6 +674,162 @@ async fn inbox(State(s): App, method: Method, uri: Uri, headers: HeaderMap, body
         json!({ "waitingOnUs": waiting_on_us, "noticesToAck": notices_to_ack, "sharedOpen": shared_open,
                 "waitingOnThem": waiting_on_them, "truncated": truncated }),
     )
+}
+
+// ---------------------------------------------------------------- waiting for news
+
+/// One key may have this many requests held by `GET /v1/inbox/wait` at a time.
+pub const WAITS_PER_KEY: usize = 2;
+/// One answer of `GET /v1/inbox/wait` holds at most this many events.
+pub const WAIT_EVENTS_MAX: usize = 100;
+
+struct WaitQuery<'a> {
+    /// Room id -> the last entry number the caller has seen. `None`: no cursor was sent.
+    after: Option<HashMap<&'a str, u64>>,
+    /// Seconds to hold the request; `None` for the board's cap.
+    wait: Option<u64>,
+    room: Option<&'a str>,
+}
+
+/// `after` (a cursor from an earlier answer), `wait` (seconds, up to four digits; more than the board's cap is
+/// cut to the cap) and `room`. A cursor is `-` for no rooms, or `<room>.<seq>` parts joined by `_`: the rooms are
+/// the caller's own and each number is an entry number of that room's record, so it says nothing about any other
+/// room. Anything else, a repeated name or a bad value is `400 bad_query`.
+fn wait_query(query: Option<&str>) -> Result<WaitQuery<'_>, Refusal> {
+    let bad = (StatusCode::BAD_REQUEST, "bad_query");
+    let mut q = WaitQuery { after: None, wait: None, room: None };
+    let mut seen = BTreeSet::new();
+    for pair in query.unwrap_or("").split('&').filter(|p| !p.is_empty()) {
+        let (name, value) = pair.split_once('=').ok_or(bad)?;
+        if !seen.insert(name) {
+            return Err(bad);
+        }
+        match name {
+            "wait" if (1..=4).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_digit()) => q.wait = Some(value.parse().map_err(|_| bad)?),
+            "room" if store::is_token(value, 3, 64) => q.room = Some(value),
+            "after" => {
+                let mut cursor = HashMap::new();
+                for part in value.split('_').filter(|_| value != "-") {
+                    let (room, seq) = part.rsplit_once('.').ok_or(bad)?;
+                    let digits = (1..=15).contains(&seq.len()) && seq.bytes().all(|b| b.is_ascii_digit());
+                    if !store::is_token(room, 3, 64) || !digits || cursor.insert(room, seq.parse().map_err(|_| bad)?).is_some() {
+                        return Err(bad);
+                    }
+                }
+                q.after = Some(cursor);
+            }
+            _ => return Err(bad),
+        }
+    }
+    Ok(q)
+}
+
+/// What is new for the caller after its cursor, and the cursor to send next. Looks only at the rooms the caller's
+/// organisation is in now (one of them with `room`). An event is an entry of a room's record without its hashes:
+/// the same facts for every key class, and no title or text. Entries the caller's own organisation made are
+/// passed over: they move the cursor and are not events. A room the cursor does not name is new to the caller,
+/// and all of its record counts. Without a cursor nothing is an event and the cursor is where the rooms stand.
+fn news(store: &Store, agent: &Agent, q: &WaitQuery<'_>) -> (Vec<Value>, String, bool) {
+    let mut events = Vec::new();
+    let mut cursor = Vec::new();
+    let mut more = false;
+    for room in store.rooms.values().filter(|r| r.is_member(&agent.org) && q.room.is_none_or(|only| only == r.id)) {
+        let entries = store.chains.get(&room.id).map_or(&[][..], Vec::as_slice);
+        let head = entries.len() as u64;
+        // A cursor ahead of the record (a board restored from a backup) starts again at the head.
+        let from = q.after.as_ref().map_or(head, |c| c.get(room.id.as_str()).copied().unwrap_or(0)).min(head);
+        let own = room.display_name(&agent.org);
+        let mut seen = from;
+        for e in &entries[from as usize..] {
+            if e.actor != own {
+                if events.len() == WAIT_EVENTS_MAX {
+                    more = true;
+                    break;
+                }
+                events.push(json!({ "room": room.id, "seq": e.seq, "kind": e.kind, "card": e.card, "actor": e.actor, "time": e.time }));
+            }
+            seen = e.seq;
+        }
+        cursor.push(format!("{}.{seen}", room.id));
+    }
+    (events, if cursor.is_empty() { "-".to_owned() } else { cursor.join("_") }, more)
+}
+
+/// A place among the held requests of a key, given back when the request ends, however it ends.
+struct WaitSlot(Arc<Shared>, String);
+
+impl WaitSlot {
+    fn take(s: &Arc<Shared>, key_id: &str) -> Option<Self> {
+        let mut waits = s.waits.lock().unwrap();
+        let held = waits.entry(key_id.to_owned()).or_insert(0);
+        (*held < WAITS_PER_KEY).then(|| {
+            *held += 1;
+            WaitSlot(s.clone(), key_id.to_owned())
+        })
+    }
+}
+
+impl Drop for WaitSlot {
+    fn drop(&mut self) {
+        let mut waits = self.0.waits.lock().unwrap();
+        if let Some(held) = waits.get_mut(&self.1) {
+            *held -= 1;
+            if *held == 0 {
+                waits.remove(&self.1);
+            }
+        }
+    }
+}
+
+/// The long poll. Answers at once when there is an event after the caller's cursor, or when no cursor was sent
+/// (then with the cursor to start from). Otherwise the request is held until an event arrives or the time is up
+/// (`wait` seconds, at most the board's cap), and then answered with no events and `timedOut: true`.
+///
+/// A request without a valid signature is never held: it gets the 401 at once, as everywhere. A held request
+/// counts as one request against the key's rate limit, when it arrives. Each time a held request looks again,
+/// and before it answers, the key is checked: a key that was revoked or has expired meanwhile gets the 401 and no
+/// data. A key holds at most `WAITS_PER_KEY` requests; one more is `409 too_many_waits`.
+async fn inbox_wait(State(s): App, method: Method, uri: Uri, headers: HeaderMap, body: Body) -> Response {
+    let (agent, _) = authenticated!(s, method, uri, headers, body);
+    let q = match wait_query(uri.query()) {
+        Ok(q) => q,
+        Err(r) => return refuse(r),
+    };
+    let hold = q.wait.unwrap_or(s.wait_cap).min(s.wait_cap);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(hold);
+    let mut slot = None;
+    loop {
+        // Listening starts before the look, so a change between the look and the wait is not missed.
+        let changed = s.changed.notified();
+        tokio::pin!(changed);
+        changed.as_mut().enable();
+        {
+            let store = s.store.lock().unwrap();
+            let now = now_unix();
+            if !store.keys.get(&agent.key_id).is_some_and(|k| k.status == KeyStatus::Active && k.expires > now) {
+                return refused("key_ended_while_waiting", &method);
+            }
+            if q.room.is_some_and(|room| !in_room(&store, &agent, room)) {
+                return refuse(NOT_FOUND);
+            }
+            let (events, cursor, more) = news(&store, &agent, &q);
+            let timed_out = tokio::time::Instant::now() >= deadline;
+            if q.after.is_none() || !events.is_empty() || timed_out {
+                let timed_out = events.is_empty() && q.after.is_some() && hold > 0;
+                return reply(StatusCode::OK, json!({ "events": events, "cursor": cursor, "more": more, "timedOut": timed_out, "wait": hold }));
+            }
+        }
+        if slot.is_none() {
+            slot = WaitSlot::take(&s, &agent.key_id);
+            if slot.is_none() {
+                return refuse((StatusCode::CONFLICT, "too_many_waits"));
+            }
+        }
+        tokio::select! {
+            _ = &mut changed => {}
+            _ = tokio::time::sleep_until(deadline) => {}
+        }
+    }
 }
 
 struct CardQuery<'a> {
