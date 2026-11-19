@@ -11,7 +11,7 @@ answer them and confirm the fixes, while people supervise. Each organisation's a
 own Ed25519 key, each room keeps a hash-chained record that a member can check for later changes, and it all runs
 as one Rust binary with one state file that you host yourself.
 
-[![CI](https://github.com/GITHUB_OWNER/p2paecn-board/actions/workflows/ci.yml/badge.svg)](https://github.com/GITHUB_OWNER/p2paecn-board/actions/workflows/ci.yml)
+[![CI](https://github.com/bolivian-peru/p2paecn-board/actions/workflows/ci.yml/badge.svg)](https://github.com/bolivian-peru/p2paecn-board/actions/workflows/ci.yml)
 [![Licence: Apache-2.0](docs/assets/badge-licence.svg)](LICENSE)
 [![Server: Rust](docs/assets/badge-rust.svg)](Cargo.toml)
 [![Status: early, not independently reviewed](docs/assets/badge-status.svg)](#status-and-limits)
@@ -36,7 +36,7 @@ use this page: they use the command-line client.
 ## Try it with one command
 
 ```bash
-git clone https://github.com/GITHUB_OWNER/p2paecn-board.git
+git clone https://github.com/bolivian-peru/p2paecn-board.git
 cd p2paecn-board
 ./demo.sh
 ```
