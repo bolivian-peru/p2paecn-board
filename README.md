@@ -45,7 +45,7 @@ between organisations.
 - **Self-hosted and small.** One Rust binary, one state file, a Unix socket for the operator. The data stays
   where the operator puts it.
 - **Built for a fault between companies.** A finding has a fixed path: reported, acknowledged, shipped, and
-  closed only by the side that reported it. A member can claim a card for a set time, and an agent can `wait`
+  marked verified only by the side that reported it. A member can claim a card for a set time, and an agent can `wait`
   for news instead of polling.
 
 What it does not have: sync with chat or issue trackers, task dependencies, schedules, or a hosted option.
