@@ -63,12 +63,12 @@ async fn head(w: &World, a: &Agent, room: &str) -> Value {
 }
 
 async fn until_the_window_ends() {
-    tokio::time::sleep(Duration::from_millis(2100)).await;
+    tokio::time::sleep(Duration::from_millis(5100)).await;
 }
 
 #[tokio::test]
 async fn a_key_over_its_request_limit_gets_429_and_the_same_request_passes_later() {
-    let b = board(Config { key_requests: 5, window: 2, ..Config::off() });
+    let b = board(Config { key_requests: 5, window: 5, ..Config::off() });
     let w = &b.w;
     for _ in 0..5 {
         assert_eq!(w.get(&b.reseller, "/v1/inbox").await.0, StatusCode::OK);
@@ -76,11 +76,11 @@ async fn a_key_over_its_request_limit_gets_429_and_the_same_request_passes_later
     let request = signed(&b.reseller, "GET", "/v1/inbox", "", None);
     let again = copy(&request, "");
     let once_more = copy(&request, "");
-    assert_limited(&raw(&w.app, request).await, 2);
+    assert_limited(&raw(&w.app, request).await, 5);
     // Reads and writes count alike, and so does a request that would be refused for another reason.
     let idem = Uuid::new_v4().to_string();
-    assert_limited(&raw(&w.app, signed(&b.reseller, "POST", "/v1/rooms/a-x/cards", &notice(1).to_string(), Some(&idem))).await, 2);
-    assert_limited(&raw(&w.app, signed(&b.reseller, "GET", "/v1/rooms/no-such-room/cards", "", None)).await, 2);
+    assert_limited(&raw(&w.app, signed(&b.reseller, "POST", "/v1/rooms/a-x/cards", &notice(1).to_string(), Some(&idem))).await, 5);
+    assert_limited(&raw(&w.app, signed(&b.reseller, "GET", "/v1/rooms/no-such-room/cards", "", None)).await, 5);
     // Another key, of the same organisation too, has its own count.
     assert_eq!(w.get(&b.second, "/v1/inbox").await.0, StatusCode::OK);
     assert_eq!(w.get(&b.supplier, "/v1/inbox").await.0, StatusCode::OK);
@@ -103,7 +103,7 @@ async fn a_key_over_its_request_limit_gets_429_and_the_same_request_passes_later
         assert_eq!(w.get(&b.supplier, "/v1/inbox").await.0, StatusCode::OK, "twenty replays used up nothing");
     }
     let last = signed(&b.supplier, "GET", "/v1/inbox", "", None);
-    assert_limited(&raw(&w.app, last).await, 2);
+    assert_limited(&raw(&w.app, last).await, 5);
     // And a replay of an accepted request stays the 401 while the key is over its limit.
     let seen = signed(&b.second, "GET", "/v1/rooms", "", None);
     let seen_again = copy(&seen, "");
@@ -111,7 +111,7 @@ async fn a_key_over_its_request_limit_gets_429_and_the_same_request_passes_later
     for _ in 0..3 {
         w.get(&b.second, "/v1/inbox").await;
     }
-    assert_limited(&raw(&w.app, signed(&b.second, "GET", "/v1/inbox", "", None)).await, 2);
+    assert_limited(&raw(&w.app, signed(&b.second, "GET", "/v1/inbox", "", None)).await, 5);
     assert_eq!(raw(&w.app, seen_again).await, unauthorized);
 
     // The refused request did not use up its nonce: the very same bytes pass once the window has ended, and only
@@ -123,7 +123,7 @@ async fn a_key_over_its_request_limit_gets_429_and_the_same_request_passes_later
 
 #[tokio::test]
 async fn a_key_over_its_write_limit_writes_nothing_and_a_replay_is_not_a_write() {
-    let b = board(Config { key_writes: 3, window: 2, ..Config::off() });
+    let b = board(Config { key_writes: 3, window: 5, ..Config::off() });
     let w = &b.w;
     let first_body = notice(0).to_string();
     let first_idem = Uuid::new_v4().to_string();
@@ -139,8 +139,8 @@ async fn a_key_over_its_write_limit_writes_nothing_and_a_replay_is_not_a_write()
     let idem = Uuid::new_v4().to_string();
     let refused_write = signed(&b.reseller, "POST", "/v1/rooms/a-x/cards", &body, Some(&idem));
     let (same_bytes, same_bytes_again) = (copy(&refused_write, &body), copy(&refused_write, &body));
-    assert_limited(&raw(&w.app, refused_write).await, 2);
-    assert_limited(&raw(&w.app, signed(&b.reseller, "POST", "/v1/keys/revoke", r#"{"keyId":"reseller-x/second"}"#, Some(&Uuid::new_v4().to_string()))).await, 2);
+    assert_limited(&raw(&w.app, refused_write).await, 5);
+    assert_limited(&raw(&w.app, signed(&b.reseller, "POST", "/v1/keys/revoke", r#"{"keyId":"reseller-x/second"}"#, Some(&Uuid::new_v4().to_string()))).await, 5);
     // Nothing was stored and nothing appended to the record. Reads are not writes.
     assert_eq!(head(w, &b.reseller, "a-x").await, before);
     assert_eq!(w.get(&b.reseller, "/v1/rooms/a-x/cards").await.1["cards"].as_array().unwrap().len(), 3);
@@ -148,7 +148,7 @@ async fn a_key_over_its_write_limit_writes_nothing_and_a_replay_is_not_a_write()
     // The key's own count takes attempts, the ones the rules would refuse included: over its limit, a write
     // with an empty title gets the 429 before the rules are looked at.
     let empty_title = r#"{"kind":"notice","title":"","text":"x"}"#;
-    assert_limited(&raw(&w.app, signed(&b.reseller, "POST", "/v1/rooms/a-x/cards", empty_title, Some(&Uuid::new_v4().to_string()))).await, 2);
+    assert_limited(&raw(&w.app, signed(&b.reseller, "POST", "/v1/rooms/a-x/cards", empty_title, Some(&Uuid::new_v4().to_string()))).await, 5);
     // A replay of a write that was done returns its first answer: it is not a new write and is not refused.
     let (status, replayed) = send(&w.app, signed(&b.reseller, "POST", "/v1/rooms/a-x/cards", &first_body, Some(&first_idem))).await;
     let mut expected: Value = serde_json::from_str(&first).unwrap();
@@ -215,7 +215,7 @@ fn from(ip: &str, mut req: axum::http::Request<axum::body::Body>) -> axum::http:
 
 #[tokio::test]
 async fn a_source_over_its_failure_limit_keeps_getting_the_identical_401_and_its_enroll_attempts_are_not_looked_at() {
-    let b = board(Config { unsigned: 6, window: 2, ..Config::off() });
+    let b = board(Config { unsigned: 6, window: 5, ..Config::off() });
     let w = &b.w;
     let unauthorized = raw(&w.app, from("203.0.113.7", plain("GET", "/v1/inbox", ""))).await;
     assert_eq!((unauthorized.status, unauthorized.body.as_slice()), (StatusCode::UNAUTHORIZED, b"unauthorized\n".as_slice()));
@@ -246,17 +246,8 @@ async fn a_source_over_its_failure_limit_keeps_getting_the_identical_401_and_its
     // A member with a valid signature behind the same address is still served, and never sees a 429 for it.
     let (status, _) = send(&w.app, from("203.0.113.7", signed(&b.reseller, "GET", "/v1/inbox", "", None))).await;
     assert_eq!(status, StatusCode::OK);
-    // The public pages are still served. A request that is served counts nothing and leaves no window: a
-    // thousand visitors from a thousand addresses take no room in the table.
+    // The public pages are still served.
     assert_eq!(raw(&w.app, from("203.0.113.7", plain("GET", "/", ""))).await.status, StatusCode::OK);
-    let windows = w.shared.limits.window_count();
-    for n in 0..1000 {
-        let visitor = format!("198.51.{}.{}", 100 + n / 250, n % 250);
-        assert_eq!(raw(&w.app, from(&visitor, plain("GET", "/", ""))).await.status, StatusCode::OK);
-        let (status, _) = send(&w.app, from(&visitor, signed(&b.supplier, "GET", "/v1/rooms", "", None))).await;
-        assert_eq!(status, StatusCode::OK);
-    }
-    assert_eq!(w.shared.limits.window_count(), windows);
     // An IPv6 caller is counted by its /64: failures from many addresses of one /64 are one count.
     for n in 0..6 {
         assert_eq!(raw(&w.app, from(&format!("2001:db8:5:5::{n:x}"), plain("GET", "/v1/inbox", ""))).await, unauthorized);
@@ -273,6 +264,24 @@ async fn a_source_over_its_failure_limit_keeps_getting_the_identical_401_and_its
     // When the window has ended the same address enrolls with the same code.
     until_the_window_ends().await;
     assert_eq!(raw(&w.app, from("203.0.113.7", enroll(&code))).await.status, StatusCode::CREATED);
+}
+
+/// A request that is served counts nothing and leaves no window: a thousand visitors from a thousand addresses
+/// take no room in the table. This is its own test because it takes longer than a short window lasts on a slow
+/// machine.
+#[tokio::test]
+async fn served_requests_from_many_addresses_leave_no_window() {
+    let b = board(Config { unsigned: 6, window: 600, ..Config::off() });
+    let w = &b.w;
+    assert_eq!(raw(&w.app, from("203.0.113.7", plain("GET", "/v1/inbox", ""))).await.status, StatusCode::UNAUTHORIZED);
+    let windows = w.shared.limits.window_count();
+    for n in 0..1000 {
+        let visitor = format!("198.51.{}.{}", 100 + n / 250, n % 250);
+        assert_eq!(raw(&w.app, from(&visitor, plain("GET", "/", ""))).await.status, StatusCode::OK);
+        let (status, _) = send(&w.app, from(&visitor, signed(&b.supplier, "GET", "/v1/rooms", "", None))).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    assert_eq!(w.shared.limits.window_count(), windows);
 }
 
 #[tokio::test]
