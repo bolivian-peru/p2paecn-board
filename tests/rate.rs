@@ -266,6 +266,31 @@ async fn a_source_over_its_failure_limit_keeps_getting_the_identical_401_and_its
     assert_eq!(raw(&w.app, from("203.0.113.7", enroll(&code))).await.status, StatusCode::CREATED);
 }
 
+/// The room limit takes the nonce back too: a write the room limit refused is accepted later as the very same
+/// signed bytes, and a third sending of them is a replay.
+#[tokio::test]
+async fn a_write_refused_by_the_room_limit_passes_later_as_the_same_bytes() {
+    let b = board(Config { room_writes: 1, window: 5, ..Config::off() });
+    let w = &b.w;
+    let first = signed(&b.supplier, "POST", "/v1/rooms/a-x/cards", &notice(1).to_string(), Some(&Uuid::new_v4().to_string()));
+    assert_eq!(raw(&w.app, first).await.status, StatusCode::CREATED);
+    let idem = Uuid::new_v4().to_string();
+    let refused = signed(&b.reseller, "POST", "/v1/rooms/a-x/cards", &notice(2).to_string(), Some(&idem));
+    let (parts, body) = refused.into_parts();
+    let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+    let again = || {
+        let mut req = axum::http::Request::builder().method(parts.method.clone()).uri(parts.uri.clone());
+        for (name, value) in &parts.headers {
+            req = req.header(name, value);
+        }
+        req.body(axum::body::Body::from(bytes.clone())).unwrap()
+    };
+    assert_limited(&raw(&w.app, again()).await, 5);
+    until_the_window_ends().await;
+    assert_eq!(raw(&w.app, again()).await.status, StatusCode::CREATED);
+    assert_eq!(raw(&w.app, again()).await.status, StatusCode::UNAUTHORIZED);
+}
+
 /// A request that is served counts nothing and leaves no window: a thousand visitors from a thousand addresses
 /// take no room in the table. This is its own test because it takes longer than a short window lasts on a slow
 /// machine.

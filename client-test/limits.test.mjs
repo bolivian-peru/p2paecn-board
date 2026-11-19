@@ -1,7 +1,7 @@
 // End-to-end tests of the client against a board with rate limits, and against a stub that always says 429.
 // Run from the repository root after `cargo build`:  node --test client-test/
 // p2p.test.mjs imports this file. It starts its own board on 127.0.0.1 at the second port after $P2P_TEST_PORT
-// (8823 when that is unset), with 2 writes per key and 8 requests per key in a window of 3 seconds.
+// (8823 when that is unset), with 2 writes per key and 8 requests per key in a window of 6 seconds.
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -63,7 +63,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 before(async () => {
   assert.ok(existsSync(SERVER), `build the server first: ${SERVER}`);
   const env = { ...process.env, P2PAECN_HOST: HOST, P2PAECN_BIND: HOST, P2PAECN_ADMIN_SOCKET: 'op.sock',
-    P2PAECN_LIMIT_KEY_WRITES: '2', P2PAECN_LIMIT_KEY_REQUESTS: '8', P2PAECN_LIMIT_WINDOW_SECONDS: '3' };
+    P2PAECN_LIMIT_KEY_WRITES: '2', P2PAECN_LIMIT_KEY_REQUESTS: '8', P2PAECN_LIMIT_WINDOW_SECONDS: '6' };
   for (const name of ['P2PAECN_CONFIG', 'P2PAECN_STATE', 'P2PAECN_LIMIT_ROOM_WRITES', 'P2PAECN_LIMIT_UNSIGNED', 'P2PAECN_SOURCE_HEADER']) delete env[name];
   server = spawn(SERVER, [], { cwd: work, env, stdio: ['ignore', 'ignore', 'pipe'] });
   server.stderr.on('data', c => (serverLog += c));
@@ -96,8 +96,8 @@ after(async () => {
 });
 
 test('a write over the key\'s limit: the client says so, waits as long as the board asks, and the write is done once', async () => {
-  assert.match(serverLog, /limits per 3 s: 8 requests and 2 writes per key/);
-  await sleep(3200); // a fresh window
+  assert.match(serverLog, /limits per 6 s: 8 requests and 2 writes per key/);
+  await sleep(6200); // a fresh window
   const first = await post('x', 1);
   const second = await post('x', 2);
   assert.deepEqual([first.code, second.code, first.stderr, second.stderr], [0, 0, '', ''], first.all + second.all);
@@ -105,17 +105,17 @@ test('a write over the key\'s limit: the client says so, waits as long as the bo
   assert.equal(third.code, 0, third.all);
   const said = [...third.stderr.matchAll(WAITING)];
   assert.ok(said.length >= 1 && said.length <= 3, third.stderr);
-  assert.ok(Number(said[0][1]) >= 1 && Number(said[0][1]) <= 3 && said[0][2] === '2', third.stderr);
+  assert.ok(Number(said[0][1]) >= 1 && Number(said[0][1]) <= 6 && said[0][2] === '2', third.stderr);
   assert.ok(third.took >= 1000, `it waited: ${third.took} ms`);
   assert.match(third.stdout, /^posted [0-9a-f-]{36}$/m);
   assert.deepEqual(pendingFiles('x'), []);
-  await sleep(3200);
+  await sleep(6200);
   const listed = JSON.parse((await client('x', ['cards', 'a-x', '--json'])).stdout).cards;
   assert.equal(listed.length, 3, 'three cards, the third once');
 });
 
 test('reads over the key\'s limit are retried too, and every one succeeds', async () => {
-  await sleep(3200);
+  await sleep(6200);
   const runs = await Promise.all(Array.from({ length: 12 }, () => client('x', ['inbox'])));
   for (const r of runs) assert.equal(r.code, 0, r.all);
   const waited = runs.filter(r => r.stderr.includes('rate limit is reached'));
