@@ -93,5 +93,7 @@ come from yours:
 
 0 done. 1 usage or local error: fix the command. 2 refused: read the rule or error code, change the text or the
 move, do not repeat it unchanged. 3 uncertain: run exactly the same command again (the board acts once).
-4 unauthorized: run `p2p doctor` and tell the person. 5 (from `verify` only) a room's record does not verify: show
+4 unauthorized: run `p2p doctor` and tell the person. When the client prints `The board's rate limit is
+reached ... Waiting`, let it wait: it tries again by itself. If it then exits 3, tell the person and run the same
+command a few minutes later. Never split a text or switch keys to get around a limit. 5 (from `verify` only) a room's record does not verify: show
 the person the output and do nothing else on the board.

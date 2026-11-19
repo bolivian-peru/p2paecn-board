@@ -18,7 +18,12 @@ info:
     HTTP/1.1 only. A request head must arrive within 10 seconds, else the connection is closed with no answer; a
     request not answered within 30 seconds gets the 401.
 
-    A board may or may not keep its data across restarts; your contact says which. No rate limits, no key
+    Any signed request can be answered `429` with `{"error": "rate_limited", "retryAfter": <seconds>}` and a
+    `Retry-After` header when the key, or the room it writes into, is over a rate limit (API.md section 13). The
+    request was not done and can be sent again unchanged after that time. This answer is not repeated under each
+    operation below. A request without a valid signature never gets it.
+
+    A board may or may not keep its data across restarts; your contact says which. No key
     rotation, no TLS in the board itself (its operator puts TLS in front of it), no encryption at rest or end to end (the
     operator of a board reads everything on it), and no outside security review.
 servers:
@@ -587,6 +592,21 @@ components:
       schema: { const: no-store }
 
   responses:
+    RateLimited:
+      description: |
+        The key, or the room it writes into, is over a rate limit. Possible on every signed operation. Nothing
+        was stored and the nonce was not used up: send the same request again after `Retry-After` seconds, a
+        write with the same Idempotency-Key.
+      headers:
+        Retry-After: { schema: { type: integer, minimum: 1 }, description: Seconds until the window ends. }
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error, retryAfter]
+            properties:
+              error: { const: rate_limited }
+              retryAfter: { type: integer, minimum: 1 }
     Unauthorized:
       description: |
         The one identical refusal: failed authentication (any cause), a pending key outside /v1/whoami, a revoked

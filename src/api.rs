@@ -23,7 +23,7 @@ use crate::store::{AgentKey, Card, Enrolled, KeyStatus, Message, Refusal, Replay
 use crate::{chain, gate, operator, sig, store, KeyClass, Shared};
 use axum::body::Bytes;
 use axum::extract::rejection::{BytesRejection, PathRejection};
-use axum::extract::{DefaultBodyLimit, Path, Request, State};
+use axum::extract::{DefaultBodyLimit, Extension, Path, Request, State};
 use axum::http::header::{CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS};
 use axum::http::{HeaderMap, HeaderName, Method, StatusCode, Uri};
 use axum::middleware::{self, Next};
@@ -83,7 +83,46 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/keys/revoke", any(closed).post(revoke_key))
         .fallback(closed)
         .layer(DefaultBodyLimit::max(MAX_BODY))
+        .layer(middleware::from_fn_with_state(shared.clone(), unsigned_guard))
         .with_state(shared)
+}
+
+/// The address of the TCP peer of a connection, put on each of its requests by `serve`.
+#[derive(Clone, Copy)]
+pub struct Peer(pub std::net::IpAddr);
+
+tokio::task_local! {
+    /// Set while a request from a source address that is over its failure limit is handled: its refusal is not
+    /// written to the log line by line.
+    static QUIET: bool;
+}
+
+/// The limit on unsigned traffic, per source address: enroll attempts and requests that end in the 401. A caller
+/// over it is told nothing. It gets the same 401 as before, byte for byte. What changes is on the server's side:
+///
+/// - an enroll attempt from that address is answered with the 401 at once, before its code or signature is
+///   looked at, until the window ends. That bounds how many codes one address can try;
+/// - a refusal from that address is no longer logged line by line. One line says that the limit was reached.
+///   That bounds what one address can write into the log.
+///
+/// Signatures of other requests are still checked: a member behind the same address, or behind the same proxy,
+/// keeps working. So the limit does not bound the cost of checking signatures, and it does not close or slow
+/// connections. The 401 of a failed check costs the same as before.
+async fn unsigned_guard(State(s): App, peer: Option<Extension<Peer>>, req: Request, next: Next) -> Response {
+    let source = s.limits.source(req.headers(), peer.map(|Extension(Peer(ip))| ip));
+    let now = now_unix();
+    let over = s.limits.unsigned_over(&source, now);
+    if over && req.uri().path() == "/v1/enroll" {
+        return unauthorized();
+    }
+    let response = QUIET.scope(over, next.run(req)).await;
+    if response.status() == StatusCode::UNAUTHORIZED && s.limits.unsigned_failed(&source, now) == crate::rate::Failed::ReachedLimit {
+        eprintln!(
+            "refused: {} requests from the source address {source} failed within {} s; until that time has passed its enroll attempts are not looked at and its refusals are not logged",
+            s.limits.config.unsigned, s.limits.config.window
+        );
+    }
+    response
 }
 
 /// Serves the public listener. `axum::serve` sets no timeouts, so anyone could hold connections open by sending
@@ -95,8 +134,9 @@ pub async fn serve(mut listener: TcpListener, app: Router, head: Duration, whole
         tokio::time::timeout(whole, next.run(req)).await.unwrap_or_else(|_| refused("request_timeout", &method))
     }));
     loop {
-        let (io, _) = Listener::accept(&mut listener).await;
-        let service = TowerToHyperService::new(app.clone());
+        let (io, peer) = Listener::accept(&mut listener).await;
+        // Each request of the connection carries the peer's address, for the limit on unsigned traffic.
+        let service = TowerToHyperService::new(app.clone().layer(Extension(Peer(peer.ip()))));
         tokio::spawn(async move {
             let connection = http1::Builder::new().timer(TokioTimer::new()).header_read_timeout(head).serve_connection(TokioIo::new(io), service);
             let _ = connection.await;
@@ -250,8 +290,18 @@ fn signed_request<'a>(method: &'a Method, uri: &'a Uri, headers: &'a HeaderMap, 
 }
 
 fn refused(reason: &str, method: &Method) -> Response {
-    eprintln!("refused: {reason} {method}");
+    if !QUIET.try_with(|quiet| *quiet).unwrap_or(false) {
+        eprintln!("refused: {reason} {method}");
+    }
     unauthorized()
+}
+
+/// A signed, authenticated caller over a rate limit: `429` with `Retry-After` in seconds, the same number in the
+/// body. Never sent to a caller whose signature did not verify.
+fn rate_limited(retry_after: u64) -> Response {
+    let mut response = reply(StatusCode::TOO_MANY_REQUESTS, json!({ "error": "rate_limited", "retryAfter": retry_after }));
+    response.headers_mut().insert(axum::http::header::RETRY_AFTER, axum::http::HeaderValue::from(retry_after));
+    response
 }
 
 /// A `viewer` key's answer to anything but a read.
@@ -274,19 +324,29 @@ fn authenticate(s: &Shared, method: &Method, uri: &Uri, headers: &HeaderMap, bod
         let k = store.keys.get(id).filter(|k| k.expires > now && k.status != KeyStatus::Revoked)?;
         Some((Agent { key_id: id.to_owned(), org: k.org.clone(), class: k.class }, k.key, k.status))
     });
+    let mut limited = None;
     let verdict = sig::verify_after(
         &request,
         &s.host,
         now,
         s.not_before,
         |_| known.as_ref().map(|(_, key, _)| *key),
-        |id, nonce| s.store.lock().unwrap().first_use(id, nonce, now, sig::NONCE_TTL_SECS),
+        // Reached only by a request whose signature verified. A key over its limit is stopped here, before its
+        // nonce is recorded: the nonce is not used up, so the very same request can be sent again later.
+        |id, nonce| match s.limits.key_request(id, now) {
+            Ok(()) => s.store.lock().unwrap().first_use(id, nonce, now, sig::NONCE_TTL_SECS),
+            Err(retry_after) => {
+                limited = Some(retry_after);
+                true
+            }
+        },
     );
     if let Err(failure) = verdict {
         return Err(refused(failure.reason(), method));
     }
     match known {
         Some((_, _, KeyStatus::Pending)) if !allow_pending => Err(refused("pending_key", method)),
+        Some(_) if limited.is_some() => Err(rate_limited(limited.unwrap_or(1))),
         Some((agent, _, _)) if agent.class == KeyClass::Viewer && method != Method::GET => {
             eprintln!("refused: read_only_key {method}");
             Err(refuse(READ_ONLY))
@@ -755,6 +815,7 @@ fn one_of<'a>(input: &'a Value, name: &str, allowed: &[&str]) -> Result<&'a str,
         .ok_or((StatusCode::UNPROCESSABLE_ENTITY, "bad_field"))
 }
 
+/// `room` is the room the write goes into, for the room's write limit; `None` for a write outside rooms.
 /// Runs one write under the idempotency rule: the same key repeating the same request gets the first
 /// result back; the same idempotency key with a different request is a conflict. Refusals are not stored. With a
 /// state file, the change and its replay record are saved before the answer; a failed save is `500
@@ -762,6 +823,7 @@ fn one_of<'a>(input: &'a Value, name: &str, allowed: &[&str]) -> Result<&'a str,
 fn write(
     s: &Shared,
     agent: &Agent,
+    room: Option<&str>,
     uri: &Uri,
     headers: &HeaderMap,
     body: &[u8],
@@ -784,8 +846,14 @@ fn write(
         again["replayed"] = json!(true);
         return reply(first.status, again);
     }
+    // A new write, not a replay: counted against the key's writes and the room's. Over a limit, nothing is done
+    // and nothing is stored, so the same request with the same idempotency key can be sent again.
+    let now = now_unix();
+    if let Err(retry_after) = s.limits.write(&agent.key_id, room, now) {
+        return rate_limited(retry_after);
+    }
     let before = s.snapshot(&store);
-    match action(&mut store, &input, now_unix()) {
+    match action(&mut store, &input, now) {
         Ok((status, value)) => {
             store.replays.insert(slot, Replay { fingerprint, status, body: value.clone() });
             // Saved, replay record included, before the answer goes out; if that fails, undone and not answered.
@@ -826,6 +894,12 @@ fn visible_card(store: &Store, agent: &Agent, id: &str) -> Result<Uuid, Refusal>
         .ok_or(NOT_FOUND)
 }
 
+/// The room of the card, if the card exists in a room the caller's organisation is in.
+fn visible_card_room(store: &Store, agent: &Agent, id: &str) -> Option<String> {
+    let id = visible_card(store, agent, id).ok()?;
+    store.card(id).map(|c| c.room.clone())
+}
+
 fn thread_has_room(store: &Store, card: Uuid) -> Result<(), Refusal> {
     match store.thread_length(card) < MAX_THREAD {
         true => Ok(()),
@@ -839,7 +913,7 @@ async fn create_card(State(s): App, room: Param, method: Method, uri: Uri, heade
     let Some(Path(room)) = room.ok().filter(|Path(r)| in_room(&s.store.lock().unwrap(), &agent, r)) else {
         return refuse(NOT_FOUND);
     };
-    write(&s, &agent, &uri, &headers, &body, |store, input, now| {
+    write(&s, &agent, Some(&room), &uri, &headers, &body, |store, input, now| {
         if !in_room(store, &agent, &room) {
             return Err(NOT_FOUND);
         }
@@ -875,10 +949,10 @@ async fn create_card(State(s): App, room: Param, method: Method, uri: Uri, heade
 async fn post_message(State(s): App, id: Param, method: Method, uri: Uri, headers: HeaderMap, body: Body) -> Response {
     let (agent, body) = authenticated!(s, method, uri, headers, body);
     // A card the caller cannot see is 404 before anything else, a replay of its own earlier write included.
-    let Some(Path(id)) = id.ok().filter(|Path(id)| visible_card(&s.store.lock().unwrap(), &agent, id).is_ok()) else {
+    let Some((id, room)) = id.ok().and_then(|Path(id)| visible_card_room(&s.store.lock().unwrap(), &agent, &id).map(|room| (id, room))) else {
         return refuse(NOT_FOUND);
     };
-    write(&s, &agent, &uri, &headers, &body, |store, input, now| {
+    write(&s, &agent, Some(&room), &uri, &headers, &body, |store, input, now| {
         let card_id = visible_card(store, &agent, &id)?;
         let kind = one_of(input, "kind", &["reply", "proof", "correction", "ack"])?;
         let text = text_field(input, "text", gate::MAX_TEXT)?;
@@ -913,10 +987,10 @@ async fn post_message(State(s): App, id: Param, method: Method, uri: Uri, header
 async fn set_stage(State(s): App, id: Param, method: Method, uri: Uri, headers: HeaderMap, body: Body) -> Response {
     let (agent, body) = authenticated!(s, method, uri, headers, body);
     // A card the caller cannot see is 404 before anything else, a replay of its own earlier write included.
-    let Some(Path(id)) = id.ok().filter(|Path(id)| visible_card(&s.store.lock().unwrap(), &agent, id).is_ok()) else {
+    let Some((id, room)) = id.ok().and_then(|Path(id)| visible_card_room(&s.store.lock().unwrap(), &agent, &id).map(|room| (id, room))) else {
         return refuse(NOT_FOUND);
     };
-    write(&s, &agent, &uri, &headers, &body, |store, input, now| {
+    write(&s, &agent, Some(&room), &uri, &headers, &body, |store, input, now| {
         let card_id = visible_card(store, &agent, &id)?;
         let stage = one_of(input, "stage", &["acknowledged", "need-info", "shipped", "closed"])?;
         let text = text_field(input, "text", gate::MAX_TEXT)?;
@@ -974,7 +1048,7 @@ async fn set_stage(State(s): App, id: Param, method: Method, uri: Uri, headers: 
 /// answers exactly like a key that does not exist. Revocation is immediate and final.
 async fn revoke_key(State(s): App, method: Method, uri: Uri, headers: HeaderMap, body: Body) -> Response {
     let (agent, body) = authenticated!(s, method, uri, headers, body);
-    write(&s, &agent, &uri, &headers, &body, |store, input, _now| {
+    write(&s, &agent, None, &uri, &headers, &body, |store, input, _now| {
         let key_id = input.get("keyId").and_then(Value::as_str).ok_or((StatusCode::UNPROCESSABLE_ENTITY, "bad_field"))?;
         let key = store.keys.get_mut(key_id).filter(|k| k.org == agent.org).ok_or(NOT_FOUND)?;
         key.status = KeyStatus::Revoked;

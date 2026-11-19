@@ -369,7 +369,7 @@ async fn a_replayed_or_refused_write_appends_nothing() {
 
     // Refusals of every kind leave the head where it was.
     let refused = [
-        (&b.reseller, path.to_owned(), json!({ "kind": "finding", "severity": "wrong", "title": TITLE, "text": "Call 10.1.2.3 for details." }), StatusCode::UNPROCESSABLE_ENTITY),
+        (&b.reseller, path.to_owned(), json!({ "kind": "finding", "severity": "wrong", "title": TITLE, "text": "Call 203.0.113.7 for details." }), StatusCode::UNPROCESSABLE_ENTITY),
         (&b.reseller, path.to_owned(), json!({ "kind": "finding", "severity": "nope", "title": TITLE, "text": TEXT }), StatusCode::UNPROCESSABLE_ENTITY),
         (&b.reseller, format!("/v1/cards/{card}/stage"), json!({ "stage": "shipped", "text": "Our own card." }), StatusCode::FORBIDDEN),
         (&b.reseller, format!("/v1/cards/{card}/stage"), json!({ "stage": "closed", "outcome": "verified", "text": "Too early." }), StatusCode::CONFLICT),

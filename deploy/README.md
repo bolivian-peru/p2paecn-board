@@ -19,8 +19,12 @@ Files here:
 Read this before inviting anyone. The board on this VM still has:
 
 - **no key rotation** (a key is replaced by enrolling a new one and revoking the old);
-- **no rate limits** (a member's key can send as fast as it likes; so can anyone sending unsigned requests, who
-  gets only the 401);
+- **only simple rate limits** (counts per key, per room and per source address, in memory; see the variables in
+  `board.env.example`. They do not limit connections or total load, so anyone can still send unsigned requests
+  as fast as the network allows and gets only the 401. Behind the proxy of this procedure every caller has the
+  proxy's address: without `P2PAECN_SOURCE_HEADER` the limit on unsigned traffic is one budget for all callers
+  together, and whoever uses it up stops enrollment for the rest of the minute. A limit in the proxy itself is
+  the better place for one, and this procedure does not set one up);
 - **no record that binds the operator** (each room has a hash-chained record that a member's client checks
   against a head it saved, see `partner-pack/CHAIN.md`; it does not stop you, the operator, from changing the
   state file, the head is not signed, and operator actions outside rooms and all reads are in no record. Tell

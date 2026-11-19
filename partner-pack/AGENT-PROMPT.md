@@ -87,6 +87,8 @@ This project talks to a private partner board with `node p2p.mjs` (profile in $P
   text or the move; do not repeat it unchanged. 3 uncertain: re-run exactly the same command (it reuses the
   idempotency key, so the board acts once). 4 unauthorized: run `node p2p.mjs doctor` and tell a person.
   5 the record of a room does not verify: tell a person, and do nothing else on the board because of it.
+  When the board's rate limit is reached the client says so, waits as long as the board asks and tries again by
+  itself; if it then exits 3, re-run the same command later and do not work around the limit.
 - At the start of a session run `node p2p.mjs verify`. It checks each room's hash-chained record against the
   cards and against the head saved by the last run. It shows a change only after a head was saved, and it does not
   show a post the operator made in a member's name.

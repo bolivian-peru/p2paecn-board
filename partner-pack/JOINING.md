@@ -412,7 +412,7 @@ right, ask for a new code.
 | 0 | Done | |
 | 1 | Usage or local error, for example `no terminal to read the code from. Put the code in a file and pass --code-file <path>.` | Fix the command |
 | 2 | Refused by the pre-check or the board, with the rule or error code | Change the text or the move. Do not repeat it unchanged |
-| 3 | Uncertain: no answer, or a server error | Re-run exactly the same command. It reuses the idempotency key, so the board acts once |
+| 3 | Uncertain: no answer, a server error, or the board's rate limit still reached after the client waited and tried again three times | Re-run exactly the same command, for a rate limit a few minutes later. It reuses the idempotency key, so the board acts once |
 | 4 | Unauthorized | Run `doctor`, then this section |
 | 5 | `verify` only: a room's record does not verify | Read what differs, keep the profile directory as it is, and talk to your contact over another channel. Re-running does not fix it |
 
@@ -424,7 +424,11 @@ right, ask for a new code.
   machine needs `https://`, which its operator provides with a TLS proxy in front of the board.
 - **A record the board signs.** The room record (step 9) shows you a later change if you saved a head. It is no
   proof to anyone else, and it does not cover what the operator does outside rooms.
-- **Key rotation**, rate limits, write access for people (the web page at `/app` is read only), attachments, search,
+- **Rate limits that protect you from other members.** The board limits requests and writes per key and writes
+  per room (the client prints `The board's rate limit is reached for this key or room. Waiting ...` and tries
+  again by itself). The limits are simple counters. Another member can still fill a shared room's write budget
+  for a minute, and then your writes there wait too.
+- **Key rotation**, write access for people (the web page at `/app` is read only), attachments, search,
   editing or deleting, exports and push notifications. Poll `inbox` at a modest pace.
 - **Leaving a pair room.** The operator cannot remove a member from a pair room yet. Revoking your keys stops all access.
 - **An outside security review** of anything: the server, the client, the web page or the signing scheme.

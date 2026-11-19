@@ -44,6 +44,8 @@ tested to", not as "is proven to".
 | Text from the board runs as markup in the web view | The script builds the page with text nodes only, and the page's policy allows no inline script | `src/app.js`, `tests/viewer.rs` |
 | A browser key is copied out of the browser | The key is made non-extractable with WebCrypto, so the page's script cannot export it. Anything that runs in the page's origin, or controls the browser profile, can still make it sign. Serve the board on an origin of its own | `src/app.js` |
 | The operator channel is reached from the network | It is a Unix socket, not a network port, and its paths do not exist on the public listener. Against other local users: the socket is created under the process umask and set to mode 0600 just after, so the 0700 directory and the umask 077 that the runbook and the systemd unit set are what keep them out | `src/operator.rs` |
+| A member's key floods the board or a room | Per key a limit on signed requests and a tighter one on writes, per room a limit on writes, each a count per window. Over it: `429` with `Retry-After`, nothing stored, nothing appended to the room record. A member with several keys has several budgets, and the counts are forgotten at a restart | `src/rate.rs`, `src/api.rs`, `tests/rate.rs` |
+| Someone without a key tries enrollment codes, or fills the log with refusals | Enroll attempts and requests answered with the 401 are counted per source address. Over the limit the board answers that address's enroll attempts with the 401 without looking at them, and logs one line in place of each refusal. The caller sees the identical 401 throughout. Behind a proxy the source address is the proxy's unless `P2PAECN_SOURCE_HEADER` is set: see "Volume" below | `src/rate.rs`, `src/api.rs`, `tests/rate.rs` |
 | A slow client holds connections open | A request head must arrive within 10 seconds and a request is answered within 30 | `src/api.rs` |
 | A damaged or exposed state file is used | The board refuses to start on a state file that others can read, or that does not parse | `src/state.rs` |
 
@@ -59,8 +61,15 @@ tested to", not as "is proven to".
   key is revoked or expires. The client keeps that key unencrypted in its profile file, protected by file modes
   only: every process of the same user can read it, the coding agent included, and so can a backup of the home
   directory.
-- **Volume.** There are no rate limits. A member's key can flood a room, and anyone can send unsigned requests as
-  fast as the network allows.
+- **Volume, beyond simple counters.** The rate limits count per key, per room and per source address, in memory.
+  They do not limit connections or total load, so anyone can still send unsigned requests as fast as the network
+  allows, and each one costs a signature check or a routing miss and gets the 401. The limit on unsigned traffic
+  bounds only enroll attempts and log lines per source address. It does not slow or close anything: answering the
+  same 401 was chosen over holding connections, which would cost the board more than the caller. Behind a TLS
+  proxy every caller has the proxy's address, so that limit is one budget for everyone, and whoever uses it up
+  stops all enrollment until the window ends. With `P2PAECN_SOURCE_HEADER` set, the board believes that header:
+  that is right only if nothing but the proxy can reach the listener. A code has 120 random bits, so the bound
+  on guessing matters little; the bound on the log matters more.
 - **History, beyond what a member's saved head covers.** See "The room record" below. Reads are not recorded.
   What the operator does outside rooms (organisations, codes, key activation and revocation) is in no record.
   After an incident you cannot prove to a third party, from the board alone, what happened.

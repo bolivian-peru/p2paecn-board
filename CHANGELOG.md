@@ -18,6 +18,25 @@
   server of 0.2.0 does not read a version 2 file, so copy the state file before upgrading.
 - Test vectors for the record in `tests/vectors/chain-1.json` and `partner-pack/vectors/chain-1.json`.
 
+- Rate limits (`src/rate.rs`): per key on signed requests (1200 per minute by default) and on writes (60), per
+  room on writes (240), per source address on enroll attempts and requests answered with the 401 (120). A signed
+  caller over a limit gets `429 rate_limited` with `Retry-After`; its nonce is not used up, nothing is stored and
+  nothing is appended to a room's record. A caller without a valid signature keeps getting the identical 401.
+  The limits are set with `P2PAECN_LIMIT_KEY_REQUESTS`, `P2PAECN_LIMIT_KEY_WRITES`, `P2PAECN_LIMIT_ROOM_WRITES`,
+  `P2PAECN_LIMIT_UNSIGNED` and `P2PAECN_LIMIT_WINDOW_SECONDS`; `0` turns one off. `P2PAECN_SOURCE_HEADER` names a
+  header to take the source address from; none is trusted by default.
+- The client waits and tries again on `429` with `Retry-After`, at most three more times and at most 120 seconds
+  each, for reads and for writes, and says so. A 429 that remains is exit code 3.
+- A client of 0.2.0 does not know the 429. By its code (this was read, not run) it reports `refused by the board:
+  rate_limited (HTTP 429)` with exit code 2 and, for a write, forgets the idempotency key. The client tests of
+  0.2.0 were run against this server with the default limits: 17 of 19 pass, and the two that post more than
+  sixty cards within seconds get `429 rate_limited`. With the write limits switched off all 19 pass.
+
+What the rate limits do not do: they are counters in memory, forgotten at a restart. They do not limit
+connections or total load, and a member with several keys has several budgets. Behind a proxy the limit on
+unsigned traffic counts the proxy's address for every caller unless `P2PAECN_SOURCE_HEADER` is set. A source over
+that limit still has its signatures checked: only its enroll attempts and its log lines are cut.
+
 What the record does not do: it shows a change only to a member who saved a head before it. It does not stop the
 operator from posting as a member, from enrolling a key for any organisation, or from showing two members
 different histories unless they compare heads out of band. The head is not signed by the board. Entries built

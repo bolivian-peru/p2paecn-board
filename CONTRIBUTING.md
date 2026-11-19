@@ -17,7 +17,7 @@ cargo build
 
 ```bash
 cargo test
-node --test client-test/      # starts target/debug/p2paecn-board on port $P2P_TEST_PORT (8821 if unset) and the next one
+node --test client-test/      # starts target/debug/p2paecn-board on port $P2P_TEST_PORT (8821 if unset) and the next two
 node --test app-test/         # the same binary on port $APP_TEST_PORT (8841 if unset)
 ```
 

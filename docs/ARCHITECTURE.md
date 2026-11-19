@@ -36,6 +36,7 @@ This describes the code as it is in this repository. The API in full is in
 | Shared state | `src/lib.rs` | The host string, the record behind a mutex, the state file path, the start second, the key classes, the bootstrap config |
 | Public routes | `src/api.rs` | Routing, authentication, the access rules, the views each key class gets, idempotent writes, listener timeouts |
 | Signature | `src/sig.rs` | The canonical string, the checks and their order, the fingerprint |
+| Rate limits | `src/rate.rs` | Counts per window, in memory: requests and writes per key, writes per room, failures per source address. The limits come from the environment |
 | Content gate | `src/gate.rs` | The patterns every title and text must pass |
 | Record | `src/store.rs` | Organisations, rooms, keys, enrollment codes, cards, messages, each room's chain, replay records, nonces |
 | Room record | `src/chain.rs` | The hash chain of each room: the bytes that are hashed, appending, the check of the links, and building chains from a state file that has none |
@@ -81,14 +82,17 @@ A signed request, for example `POST /v1/rooms/room-a/cards`:
    started; the key is known, not expired and not revoked; the body digest matches; the Ed25519 signature verifies
    over the canonical string the board rebuilds, with its own configured host string in line 3; the nonce is new
    for this key id (nonces are kept in memory, for 601 seconds). An unknown key takes the same steps as a known
-   one and fails at the end. Every failure is the same 401, and the reason goes to the server log only.
+   one and fails at the end. Every failure is the same 401, and the reason goes to the server log only. Just
+   before the nonce is recorded, the key's request count is checked: a key over its limit gets `429
+   rate_limited` with `Retry-After`, and its nonce is not recorded, so the same request can be sent again.
 4. **Key state.** A pending key may call `GET /v1/whoami` and nothing else. A `viewer` key that sends anything but
    a `GET` gets `403 read_only_key`.
 5. **Access.** The key's organisation must be a member of the room, or of the card's room. If not, the answer is
    `404 not_found`, the same as for a room or card that does not exist.
 6. **Write rule.** A write needs an `Idempotency-Key` (a UUID, signed). The same key repeating the same path and
    body gets the first answer with `"replayed": true`. A different request under the same idempotency key is a
-   conflict. Refusals are not stored.
+   conflict. Refusals are not stored. A write that is not a replay is then counted against the key's write limit
+   and the room's: over either, the answer is `429` and nothing else happens.
 7. **Fields and gate.** Each field is checked in turn. A title or text is checked for its length and then by the
    content gate.
 8. **Room rules.** Who may move a card depends on the room kind and on who reported it (see below).
@@ -178,6 +182,26 @@ What this is for: a member who saved a head can see that something at or before 
 removed. It does not stop the operator from changing the state file, from posting as a member, or from showing
 two members different histories, and an unsigned head proves nothing to a third party. The limits are listed in
 [THREAT-MODEL.md](THREAT-MODEL.md), "The room record".
+
+## Rate limits
+
+`src/rate.rs` keeps counts per fixed window (60 seconds unless configured). A window starts with the first request
+counted in it. Nothing is saved: a restart forgets every count.
+
+| Limit | Counts | Default per window | Over it |
+|---|---|---|---|
+| Per key, requests | Every request of the key whose signature verified | 1200 | `429 rate_limited`, `Retry-After` |
+| Per key, writes | Every write that is not a replay, refused ones included | 60 | The same |
+| Per room, writes | The same writes, for the room they go into | 240 | The same |
+| Per source address | Enroll attempts and every request answered with the 401 | 120 | The identical 401. Enroll attempts from that address are not looked at, and its refusals are logged as one line, until the window ends |
+
+A write is counted for its key and its room together or for neither. `Retry-After` is the number of seconds until
+the window ends. The 429 is given only to a caller whose signature verified, so it tells an outsider nothing. The
+table of windows holds at most 20,000 entries; past that, new names share one window per kind of limit.
+
+The source address is the TCP peer's, which `serve` puts on each request of a connection. With
+`P2PAECN_SOURCE_HEADER` set it is the last value of that header, when that value is an IP address. For what the
+limits leave open, see the README, "Status and limits".
 
 ## The gate
 

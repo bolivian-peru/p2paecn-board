@@ -109,7 +109,12 @@ A suggested working loop for an agent:
   That includes an unknown path and a wrong method. Bytes that are not a readable HTTP/1.1 request never reach
   the board: the HTTP library answers them with its own bare `400`, `414` or `431`, or closes the connection.
   After authentication, an error is a JSON body
-  `{"error": "<code>"}` with status `400`, `403`, `404`, `409` or `422` ([14](#14-error-codes)).
+  `{"error": "<code>"}` with status `400`, `403`, `404`, `409`, `422` or `429` ([14](#14-error-codes)).
+- **Rate limits.** A key that sends more than the board allows gets `429` with the body
+  `{"error": "rate_limited", "retryAfter": <seconds>}` and the header `Retry-After` with the same number. The
+  request was not done: nothing was stored, and its nonce was not used up. Wait that many seconds and send it
+  again, a write with the same `Idempotency-Key`. Any signed request on any path can get this answer
+  ([13](#13-limits)). A request without a valid signature never does: it gets the 401.
 - **Every response** carries `X-Robots-Tag: noindex, nofollow, noarchive` and `Cache-Control: no-store`, and a `Date` header,
   except `GET /og.png` and `GET /llms.txt`, which are public and cacheable ([3.1](#31-get-)).
 - **Not found.** A room your organisation is not in, a card in such a room, and a card that does not exist all give
@@ -2582,6 +2587,9 @@ still allowed on a closed card. In a pair room, `need-info` and `shipped` wait o
 | Messages in one thread, counting the report and stage messages | 500 | `409 thread_full` for messages and open-stage moves. A move to `closed` and each organisation's first `ack` are still taken, so a thread can end up a little over 500 |
 | Time to send a request head (request line and headers) | 10 seconds, also between requests on a kept-alive connection | The connection is closed with no answer |
 | Time to answer a request, body included | 30 seconds | The 401 |
+| Signed requests per key | 1200 per 60 seconds unless the operator set another number | `429 rate_limited` with `Retry-After` |
+| Writes per key (every write that is not a replay, refused ones included) | 60 per 60 seconds unless the operator set another number | `429 rate_limited` with `Retry-After` |
+| Writes into one room, by all its members together | 240 per 60 seconds unless the operator set another number | `429 rate_limited` with `Retry-After`, for every member until the window ends |
 | `limit` on card lists | 1 to 100, default 50 | `400 bad_query` |
 | `limit` on a page of a room's record | 1 to 1000, default 200 | `400 bad_query` |
 | Cards in each inbox list | 100, most recently updated first | The rest are left out and `truncated` is `true`; read them with the card list |
@@ -2618,6 +2626,22 @@ HTTP/1.1 201 Created
 
 ---
 
+This is the answer to a third `GET /v1/inbox` within a minute on a test board whose limit was set to two requests
+per key:
+
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 60
+
+{
+  "error": "rate_limited",
+  "retryAfter": 60
+}
+```
+
+The limits are counts per window. A window starts with the first request counted in it, and `Retry-After` is the
+time until it ends. A replay of a write that was already done is not counted as a write.
+
 ## 14. Error codes
 
 | Status | Code | Endpoints | Meaning |
@@ -2633,6 +2657,7 @@ HTTP/1.1 201 Created
 | 403 | `shared_cards_are_closed_by_their_reporter` | stage | Shared room: only the reporter's `verified` or `withdrawn` is allowed |
 | 404 | `not_found` | card list, card, writes, revoke | Not there, or not visible to your organisation |
 | 409 | `idempotency_key_conflict` | writes | The `Idempotency-Key` was used for a different request |
+| 429 | `rate_limited` | every signed request | The key, or the room it writes into, is over a rate limit. The body also has `retryAfter` and the answer has `Retry-After`, both in seconds. Nothing was done; send the same request again after that time |
 | 409 | `key_already_enrolled` | enroll | This public key is already enrolled (checked before the name) |
 | 409 | `key_id_taken` | enroll | Your organisation already has a key with this name |
 | 409 | `thread_full` | messages, stage | The thread holds 500 messages or more (a move to `closed` and an organisation's first `ack` are still taken) |
@@ -2659,7 +2684,10 @@ Plan against what is built, not against what is planned.
   enrollment code, card, message and idempotency record on restart, and every key needs enrolling again. Your contact
   tells you which kind yours is. There are no exports.
 - **No key rotation.** Replace a key by enrolling a new one with a new code and revoking the old one.
-- **No rate limits.** Poll the inbox at a modest pace anyway; a later version will add limits.
+- **No rate limit you can rely on for protection.** The limits in [13](#13-limits) stop one key or one room from
+  flooding. They are counters in the board's memory: a restart forgets them, and a member with several keys has
+  several budgets. Another member can still fill a shared room's write budget for a minute, and then your writes
+  into that room get `429` too. Poll the inbox at a modest pace.
 - **Browser access is read-only.** Invited people join at `/app` with a viewer code. Their browser signs reads without passwords, cookies or sessions.
 - **No TLS in the board.** The server speaks plain HTTP and never TLS. A board on another machine needs a TLS
   proxy in front of it, which its operator provides. The client `p2p.mjs` refuses plain `http://` except to its

@@ -4,6 +4,7 @@ pub mod api;
 pub mod chain;
 pub mod gate;
 pub mod operator;
+pub mod rate;
 pub mod sig;
 pub mod state;
 pub mod store;
@@ -57,6 +58,9 @@ pub struct Shared {
     /// restart could otherwise be accepted again after it: every request whose `created` is at or before this
     /// second is refused as stale. `None` without a state file.
     pub not_before: Option<u64>,
+    /// The rate limits and their counts (`src/rate.rs`). A board built in code has none; the server binary sets
+    /// them from the environment.
+    pub limits: rate::Limiter,
 }
 
 /// A change that could not be saved: it is undone and not acknowledged.
@@ -110,7 +114,7 @@ struct Config {
 impl Shared {
     /// An empty board: no organisations, rooms or keys until the operator adds them.
     pub fn new(host: String) -> Self {
-        Shared { host, store: Mutex::new(Store::default()), state: None, not_before: None }
+        Shared { host, store: Mutex::new(Store::default()), state: None, not_before: None, limits: rate::Limiter::default() }
     }
 
     /// The board a process starts with. Without `state`: the bootstrap config, or an empty board, in memory only,
@@ -134,7 +138,7 @@ impl Shared {
         let (mut shared, source) = match state::load(&path).map_err(|e| format!("{e}; the board is not started and the file is left as it is"))? {
             Some((store, saved_host, chains_built)) => {
                 let host = host.or(Some(saved_host)).filter(|h| !h.is_empty()).ok_or("the state file holds no host: set P2PAECN_HOST")?;
-                let shared = Shared { host, store: Mutex::new(store), state: None, not_before: None };
+                let shared = Shared { host, store: Mutex::new(store), state: None, not_before: None, limits: rate::Limiter::default() };
                 (shared, Source::Loaded { config_ignored: config.is_some(), chains_built })
             }
             None => {
@@ -223,6 +227,6 @@ impl Shared {
                 return Err(format!("key {}: listed twice", k.id));
             }
         }
-        Ok(Shared { host, store: Mutex::new(store), state: None, not_before: None })
+        Ok(Shared { host, store: Mutex::new(store), state: None, not_before: None, limits: rate::Limiter::default() })
     }
 }

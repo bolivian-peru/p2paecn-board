@@ -667,7 +667,9 @@ const listening = () => new Promise(done => {
 before(async () => {
   assert.equal(await listening(), false, `port ${PORT} is in use`);
   assert.ok(Buffer.byteLength(join(work, 'op.sock')) < 100, 'socket path fits');
-  server = spawn(SERVER, [], { cwd: work, env: { PATH: process.env.PATH, P2PAECN_HOST: HOST, P2PAECN_BIND: HOST, P2PAECN_ADMIN_SOCKET: join(work, 'op.sock') },
+  server = spawn(SERVER, [], { cwd: work, env: { PATH: process.env.PATH, P2PAECN_HOST: HOST, P2PAECN_BIND: HOST, P2PAECN_ADMIN_SOCKET: join(work, 'op.sock'),
+    // The paging test below posts some hundred cards within a second, which the write limits are there to stop.
+    P2PAECN_LIMIT_KEY_WRITES: '0', P2PAECN_LIMIT_ROOM_WRITES: '0' },
     stdio: ['ignore', 'pipe', 'pipe'] });
   server.stdout.on('data', c => (serverLog += c));
   server.stderr.on('data', c => (serverLog += c));

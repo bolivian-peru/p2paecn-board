@@ -49,6 +49,14 @@ pub struct World {
     pub shared: Arc<Shared>,
 }
 
+/// A board with rate limits. `world` has none, as every board built in code.
+pub fn world_with_limits(config: Value, limits: p2paecn_board::rate::Config) -> World {
+    let mut shared = Shared::from_config_json(&config.to_string(), None).unwrap();
+    shared.limits = p2paecn_board::rate::Limiter::new(limits);
+    let shared = Arc::new(shared);
+    World { app: api::router(shared.clone()), ops: operator::router(shared.clone()), shared }
+}
+
 pub fn world(config: Value) -> World {
     let shared = Arc::new(Shared::from_config_json(&config.to_string(), None).unwrap());
     World { app: api::router(shared.clone()), ops: operator::router(shared.clone()), shared }

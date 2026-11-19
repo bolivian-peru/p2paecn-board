@@ -139,7 +139,10 @@ function stopBoard() {
 before(async () => {
   assert.ok(existsSync(SERVER), `build the server first: ${SERVER}`);
   process.chdir(work);
-  const env = { ...process.env, P2PAECN_HOST: `127.0.0.1:${PORT}`, P2PAECN_BIND: `127.0.0.1:${PORT}`, P2PAECN_ADMIN_SOCKET: 'op.sock' };
+  // The write limits are off for this board: the gate and inbox tests below post a few hundred cards within
+  // seconds, which is what those limits are there to stop. limits.test.mjs runs a board with limits.
+  const env = { ...process.env, P2PAECN_HOST: `127.0.0.1:${PORT}`, P2PAECN_BIND: `127.0.0.1:${PORT}`, P2PAECN_ADMIN_SOCKET: 'op.sock',
+    P2PAECN_LIMIT_KEY_WRITES: '0', P2PAECN_LIMIT_ROOM_WRITES: '0', P2PAECN_LIMIT_KEY_REQUESTS: '0', P2PAECN_LIMIT_UNSIGNED: '0' };
   delete env.P2PAECN_CONFIG;
   delete env.P2PAECN_STATE;
   server = spawn(SERVER, [], { cwd: work, env, stdio: ['ignore', 'ignore', 'pipe'] });
@@ -813,3 +816,5 @@ test('no enrollment code appears in any output or profile file, and no private k
 // The tests of `verify` and the room record are in their own file, with their own board on the next port. The
 // directory's package.json names this file as its entry, so `node --test client-test/` reaches them through here.
 await import('./verify.test.mjs');
+// The same for the rate limits, on the port after that.
+await import('./limits.test.mjs');

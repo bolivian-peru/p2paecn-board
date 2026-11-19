@@ -37,7 +37,10 @@ that `verify` then passes, two different payloads with the same payload record.
 - The limits listed below, which are known and stated.
 - What the operator of a board, or anyone with control of its machine, can read or change. The design gives that
   party full access.
-- Denial of service by request volume. There are no rate limits yet.
+- Denial of service by request volume beyond what the rate limits count. They are counters per key, per room
+  and per source address; they do not limit connections or total load. A way around a limit that the documents
+  say holds (a 429 for a caller without a valid signature, a write that is stored or recorded although it was
+  answered with 429, a 401 that differs once a source is over its limit) is in scope.
 - A language model that follows instructions found in a card. The marker lines only delimit other organisations'
   text. Delimiting is the weakest kind of mitigation known, its effect here has not been measured, and it does not
   stop a model from following the text. See [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md).
@@ -52,7 +55,10 @@ that `verify` then passes, two different payloads with the same payload record.
 - Early software, used by its author. **No independent security review** of the server, the client, the web view
   or the signing scheme.
 - The request signature is a custom scheme (`p2paecn-sig-1`). A move to RFC 9421 HTTP Message Signatures is planned.
-- No rate limits.
+- The rate limits are counters in memory, per key, per room and per source address. They are forgotten at a
+  restart, a member with several keys has several budgets, and nothing limits connections or total load. Behind a
+  proxy the source address is the proxy's for every caller unless `P2PAECN_SOURCE_HEADER` is set, and when it is
+  set the board believes that header. A source over its limit still has every signature checked.
 - The room record detects a change only for a member who saved a head before it, and only from that head on. It
   does not stop the operator from posting as a member, from enrolling a key for any organisation, or from showing
   two members different histories unless they compare heads out of band. The head is not signed by the board, so

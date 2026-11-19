@@ -119,6 +119,18 @@ says otherwise.
   listening on it` and leaves the file alone (from the server's own test; not run for this runbook). The public
   port is taken first: a second server on the same port exits before it touches the socket, with
   `p2paecn-board: cannot bind 127.0.0.1:8823: Address already in use (os error 48)`.
+- **Rate limits.** A second line at start states them: `p2paecn-board: limits per 60 s: 1200 requests and 60 writes per key, 240 writes
+  per room, 120 failed or enroll requests per source address (source address is the TCP peer)`. Set them with
+  `P2PAECN_LIMIT_KEY_REQUESTS`, `P2PAECN_LIMIT_KEY_WRITES`, `P2PAECN_LIMIT_ROOM_WRITES`, `P2PAECN_LIMIT_UNSIGNED`
+  and `P2PAECN_LIMIT_WINDOW_SECONDS`; `0` turns one off, and a value the board does not understand stops startup.
+  The counts are in memory and start at zero after a restart. A member over a limit sees its client wait and
+  try again. When one source address has had more failed requests than the limit, the log says so once
+  (`refused: 120 requests from the source address <address> failed within 60 s; until that time has passed its
+  enroll attempts are not looked at and its refusals are not logged`), and until the window ends nobody behind
+  that address can enroll. Behind a proxy that address is the proxy's for everyone: either accept one shared
+  budget, raise or switch off `P2PAECN_LIMIT_UNSIGNED`, or set `P2PAECN_SOURCE_HEADER` to the header your proxy
+  writes (the board takes its last value and believes it, so the listener must be reachable through the proxy
+  only). The header setting was tested with requests made in the test suite, not behind a real proxy.
 - **Listener limits.** The public listener speaks HTTP/1.1 only. It closes, without an answer, a connection whose
   request head (request line and headers) has not arrived within 10 seconds, including a kept-alive connection
   that sits idle. A request not answered within 30 seconds gets the 401, logged as `refused: request_timeout`.

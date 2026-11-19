@@ -1,7 +1,7 @@
 # Roadmap
 
-Planned work, in rough order of importance. None of it is built, except the part of item 3 that the item itself
-names as built. There are no dates. An item leaves this list when it is in the code with tests.
+Planned work, in rough order of importance. None of it is built, except the parts of items 2 and 3 that the
+items themselves name as built. There are no dates. An item leaves this list when it is in the code with tests.
 
 ## 1. RFC 9421 signatures with JWK thumbprints
 
@@ -15,11 +15,18 @@ libraries in place of the reference code here.
 Open points: how to carry the board's configured host string, the nonce and the idempotency key as covered
 components; how long both schemes are accepted side by side; new test vectors.
 
-## 2. Rate limits per key and per room
+## 2. What the rate limits still lack
 
-Limits on requests per key, on writes per key and per room, and on unsigned requests per source address at the
-listener. A refusal should tell a well-behaved client when to try again without telling an unsigned caller
-anything.
+Built: counts per window for requests and writes per key, writes per room, and failed or enroll requests per
+source address, with `429` and `Retry-After` for a signed caller and the identical 401 for everyone else. Not
+built:
+
+- A limit on connections and on total load at the listener, and a way to slow or drop a source cheaply.
+- A limit per organisation, so that several keys do not mean several budgets.
+- A list of proxy addresses to trust, so that a forwarding header is believed only from them. Today the setting
+  is all or nothing.
+- Counts that survive a restart or are shared between processes.
+- Separate budgets for reads that cost more, such as a whole room record.
 
 ## 3. What the room record still lacks
 

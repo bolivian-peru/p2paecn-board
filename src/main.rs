@@ -1,4 +1,4 @@
-use p2paecn_board::{api, operator, Shared, Source};
+use p2paecn_board::{api, operator, rate, Shared, Source};
 use std::sync::Arc;
 
 /// P2PAECN_HOST: the host string signed into every request (wins over the bootstrap config's `host`).
@@ -7,6 +7,8 @@ use std::sync::Arc;
 /// P2PAECN_CONFIG: optional bootstrap JSON (host, rooms, keys), read once at start; with a state file, only when
 /// the state file does not exist yet.
 /// P2PAECN_STATE: optional path of the state file. Unset: memory only, everything is lost on restart.
+/// P2PAECN_LIMIT_KEY_REQUESTS, P2PAECN_LIMIT_KEY_WRITES, P2PAECN_LIMIT_ROOM_WRITES, P2PAECN_LIMIT_UNSIGNED,
+/// P2PAECN_LIMIT_WINDOW_SECONDS, P2PAECN_SOURCE_HEADER: the rate limits (src/rate.rs).
 #[tokio::main]
 async fn main() {
     let start = api::now_unix();
@@ -14,8 +16,9 @@ async fn main() {
     let host = env("P2PAECN_HOST");
     let bind = env("P2PAECN_BIND").unwrap_or_else(|| "127.0.0.1:8787".into());
     let state = env("P2PAECN_STATE").map(std::path::PathBuf::from);
-    let (shared, source) =
+    let (mut shared, source) =
         Shared::open(host, env("P2PAECN_CONFIG").map(Into::into), state, start).unwrap_or_else(|e| fail(&e));
+    shared.limits = rate::Limiter::new(rate::Config::from_env(env).unwrap_or_else(|e| fail(&e)));
     let storage = match (&source, &shared.state) {
         (Source::Memory, _) | (_, None) => "in-memory store: every organisation, room, key and card is lost on restart".to_owned(),
         (source, Some(path)) => {
@@ -58,6 +61,8 @@ async fn main() {
             store.keys.len(),
             admin.as_deref().unwrap_or("off"),
         );
+        // A second line, so that the first keeps the shape it had.
+        eprintln!("p2paecn-board: {}", shared.limits.config.describe());
     }
     if let Err(e) = api::serve(listener, api::router(shared), api::HEAD_TIMEOUT, api::REQUEST_TIMEOUT).await {
         fail(&format!("server stopped: {e}"));
