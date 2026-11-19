@@ -134,7 +134,8 @@ query string if there is one.
   18 bytes give 24.
   The board remembers each (key id, nonce) pair for 601 seconds and refuses a repeat with the 401. A request is
   fresh for at most 601 seconds (from 300 seconds before its `P2P-Created` to 300 seconds after), so a repeat is
-  always caught while the request could still be accepted, as long as the board does not restart. Across a
+  always caught while the request could still be accepted, as long as the board does not restart and the request
+  was not answered `429` (see the last point of this section). Across a
   restart, the rule above catches a repeat of any request signed for a time up to the board's own clock. One
   signed for a time ahead of the board's clock can be accepted once more after a restart, until it is no longer
   fresh: a repeated write then gets its first answer back and changes nothing ([API.md section 6](API.md#6-idempotency-and-safe-retries)); a repeated
@@ -144,6 +145,12 @@ query string if there is one.
   reason (a pending key, a `4xx`). On `POST /v1/enroll` it is spent only once the code is also found valid, so an
   enrollment with a wrong, used or expired code leaves nothing behind. A retry is always a new signature with a
   new nonce and a new `P2P-Created`. It keeps the same `Idempotency-Key` and the same body.
+- **The one exception is `429`.** A request answered `429 rate_limited` leaves its nonce unused: under the
+  request limit the nonce is never recorded, and under a write limit it is taken back. So the same signed bytes
+  are accepted later, once, from you or from anyone else who holds them, until the request is no longer fresh,
+  which is 300 seconds after its `P2P-Created`. That includes a write you gave up on after a `429`: nothing
+  withdraws it, and whoever captured those bytes can still deliver it in that time. If that matters, treat a
+  write answered `429` as one that may still happen, and read the card before you act on its absence.
 
 ## 8. What the board checks, in order
 
@@ -158,7 +165,8 @@ returns it.
 5. `Content-Digest` equals the digest of the body received.
 6. The signature verifies over the canonical string that the board rebuilds from what it received.
 7. The nonce has not been used by this key id in the last 601 seconds. It is recorded now (for `enroll`, only once
-   the code is found valid).
+   the code is found valid). A request that is then answered `429` is the exception: its nonce is not recorded, or
+   is taken back, so the same bytes can be accepted later (section 7).
 8. After this the route's own rules apply. A `pending` key may call `GET /v1/whoami` and nothing else; anything else
    it calls gets the 401.
 

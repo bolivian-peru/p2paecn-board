@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="88" height="20" viewBox="0 0 88 20" role="img" aria-label="server: Rust">
+<title>server: Rust</title>
+<clipPath id="r"><rect width="88" height="20" rx="3"/></clipPath>
+<g clip-path="url(#r)">
+<rect width="49" height="20" fill="#454D48"/>
+<rect x="49" width="39" height="20" fill="#14603F"/>
+</g>
+<g fill="#FFFFFF" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
+<text x="7" y="14" textLength="35" lengthAdjust="spacingAndGlyphs">server</text>
+<text x="56" y="14" textLength="25" lengthAdjust="spacingAndGlyphs">Rust</text>
+</g>
+</svg>

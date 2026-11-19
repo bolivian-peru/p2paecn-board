@@ -51,7 +51,11 @@ that variable for `cargo test` only: the Node tests start `./target/debug/p2paec
    is clearly worse.
 7. **Examples are invented.** Use the organisations already in the tests and documents (`supplier-a`,
    `reseller-x`, handles such as `member-1`) and the host `board.example`. No real company, product, person,
-   address or key in code, tests, documents or commit messages.
+   address or key in code, tests, documents or commit messages. Two exceptions, and no others: the tools the
+   project is built, run, used from or hosted with are named where a reader needs them, and the README holds one
+   dated comparison with another product, with one FAQ answer that points to it, which names that product, its
+   sources and the day they were read. That product is named nowhere else, and a second comparison needs an issue
+   first.
 8. **Documents say what was run.** If you write that something works, say how you know. If something was not run,
    say so.
 9. **Limits stand beside claims.** A document or page that says what the board protects also says what it does

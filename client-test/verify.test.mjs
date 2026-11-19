@@ -18,7 +18,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CLIENT = join(ROOT, 'partner-pack', 'p2p.mjs');
-const { chainEntry, chainPayload } = await import(pathToFileURL(CLIENT).href);
+const { chainEntry, chainPayload, keptEntry } = await import(pathToFileURL(CLIENT).href);
 const SERVER = join(ROOT, 'target', 'debug', 'p2paecn-board');
 const PORT = Number(process.env.P2P_TEST_PORT || 8821) + 1;
 const HOST = `127.0.0.1:${PORT}`;
@@ -26,7 +26,7 @@ const BOARD = `http://${HOST}`;
 const PAIR = 'a-x';
 const SHARED = 'hub';
 const HASH = /^[0-9a-f]{64}$/;
-const CHANGED = /The record was changed after it was last checked\./;
+const CHANGED = /Each room named here verified at its last check and does not now\./;
 
 const work = mkdtempSync(join(tmpdir(), 'p2p-verify-test-'));
 const home = name => join(work, `home-${name}`);
@@ -593,12 +593,14 @@ async function fakeBoard(name, { profileClass = 'text' } = {}) {
   }
   const state = {
     room: 'a-x',
+    kind: 'pair',
     you,
     others: ['reseller-x'],
     entries: vectors.entries.map(v => v.entry),
     details,
     asked: [],
     // What a test may replace: each gets the parsed URL and the honest answer, and returns the answer to give.
+    rooms: honest => honest,
     chain: (url, honest) => honest,
     cards: (url, honest) => honest,
     card: (id, honest) => honest,
@@ -608,7 +610,7 @@ async function fakeBoard(name, { profileClass = 'text' } = {}) {
     state.asked.push(url.pathname + url.search);
     const send = body => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(body));
     const last = state.entries[state.entries.length - 1];
-    if (url.pathname === '/v1/rooms') return send({ rooms: [{ id: state.room, kind: 'pair', you: state.you, others: state.others }] });
+    if (url.pathname === '/v1/rooms') return send(state.rooms({ rooms: [{ id: state.room, kind: state.kind, you: state.you, others: state.others }] }));
     if (url.pathname === `/v1/rooms/${state.room}/chain`) {
       const after = Number(url.searchParams.get('after'));
       const page = state.entries.slice(after, after + Number(url.searchParams.get('limit') || 200));
@@ -685,6 +687,173 @@ test('a title or text the board holds back from a text key: the room does not ve
   } finally {
     await fake.close();
     await fields.close();
+  }
+});
+
+test('a fields key goes by the name of the author, not by the flags of the board alone, for which texts are its own', async () => {
+  // What a board does that wants a fields key to pass over its own texts: it marks them as another organisation's
+  // and leaves them out.
+  const disown = name => (id, honest) => {
+    for (const item of [honest.card, ...honest.messages]) {
+      if ((item.reporter ?? item.author) !== name) continue;
+      Object.assign(item, { mine: false, untrusted: true });
+      if ('title' in item) item.title = null;
+      else item.text = null;
+    }
+    return honest;
+  };
+  const pair = await fakeBoard('own-pair', { profileClass: 'fields' });
+  const hub = await fakeBoard('own-handle', { profileClass: 'fields' });
+  const first = await fakeBoard('own-first', { profileClass: 'fields' });
+  try {
+    // A pair room: the key id of this profile is supplier-a/agent, so what supplier-a wrote is ours whatever the
+    // board marks, and whatever name the board gives us in the room list.
+    for (const [you, others] of [['supplier-a', ['reseller-x']], ['reseller-x', ['supplier-a']]]) {
+      Object.assign(pair.state, { you, others, card: disown('supplier-a') });
+      const r = await pair.run(['verify']);
+      assert.equal(r.code, 5, `${you}: ${r.all}`);
+      assert.equal(r.stdout.match(/the board gave no text, which this key is to receive/g).length, 4, 'our four messages on the first card');
+      assert.match(r.stdout, /differs {3}card 0b6f2c1e-0000-4000-8000-000000000002: the board gave no title or no report text/, 'and our own notice');
+      assert.ok(!existsSync(join(home('own-pair'), 'chain-heads.json')), 'nothing verified, nothing saved');
+    }
+    // The other side's texts may still be left out, and are counted.
+    pair.state.you = 'supplier-a';
+    pair.state.others = ['reseller-x'];
+    pair.state.card = disown('reseller-x');
+    const other = await pair.run(['verify']);
+    assert.equal(other.code, 0, other.all);
+    assert.match(other.stdout, /withheld {2}2 cards or messages were compared without their title or text/);
+    assert.equal(heads('own-pair').rooms['a-x'].you, 'supplier-a', 'the name is saved beside the head');
+
+    // A shared room: the same record under handles. The client knows its handle only from the room list, and
+    // keeps the one it was given at the first check that verified.
+    const vectors = JSON.parse(readFileSync(join(ROOT, 'partner-pack', 'vectors', 'chain-1.json'), 'utf8')).rooms[0].entries;
+    const handle = { 'supplier-a': 'member-1', 'reseller-x': 'member-2' };
+    const underHandles = state => {
+      state.kind = 'shared';
+      state.you = 'member-1';
+      state.others = ['member-2'];
+      state.entries = rebuilt('a-x', state.entries.map((e, i) => ({ ...e, actor: handle[e.actor] ?? e.actor,
+        payload: e.kind === 'member-added' ? sha256Hex(chainPayload('member-added', { name: handle[vectors[i].values.name] })) : e.payload })));
+      for (const { card, messages } of state.details.values()) {
+        card.reporter = handle[card.reporter];
+        Object.assign(card, { mine: card.reporter === 'member-1', untrusted: card.reporter !== 'member-1' });
+        for (const m of messages) Object.assign(m, { author: handle[m.author], mine: handle[m.author] === 'member-1', untrusted: handle[m.author] !== 'member-1' });
+      }
+    };
+    underHandles(hub.state);
+    const honest = await hub.run(['verify']);
+    assert.equal(honest.code, 0, honest.all);
+    assert.equal(heads('own-handle').rooms['a-x'].you, 'member-1');
+    // Later the board says this key is member-2, and leaves out what member-1 wrote. The saved name gives it away.
+    Object.assign(hub.state, { you: 'member-2', others: ['member-1'], card: disown('member-1') });
+    const later = await hub.run(['verify']);
+    assert.equal(later.code, 5, later.all);
+    assert.equal(later.stdout.match(/the board gave no text, which this key is to receive/g).length, 4);
+    assert.match(later.stderr, CHANGED);
+    assert.equal(heads('own-handle').rooms['a-x'].you, 'member-1', 'the saved name stays');
+
+    // The limit, stated in CHAIN.md: at the first check of a shared room the handle is the board's word. The
+    // same lie told from the start passes, with the texts counted as withheld.
+    underHandles(first.state);
+    Object.assign(first.state, { you: 'member-2', others: ['member-1'], card: disown('member-1') });
+    const lied = await first.run(['verify']);
+    assert.equal(lied.code, 0, lied.all);
+    assert.match(lied.stdout, /withheld {2}\d+ cards or messages were compared without their title or text/);
+
+    // A saved-heads file written before the name was kept still loads, and gets the name at the next check.
+    const path = join(home('own-pair'), 'chain-heads.json');
+    const old = JSON.parse(readFileSync(path, 'utf8'));
+    delete old.rooms['a-x'].you;
+    writeFileSync(path, JSON.stringify(old), { mode: 0o600 });
+    pair.state.card = (id, real) => real;
+    const again = await pair.run(['verify']);
+    assert.equal(again.code, 0, again.all);
+    assert.match(again.stdout, /entry 12 was the head at the last check \(\S+\): it is still in the record/);
+    assert.equal(heads('own-pair').rooms['a-x'].you, 'supplier-a');
+  } finally {
+    await pair.close();
+    await hub.close();
+    await first.close();
+  }
+});
+
+test('a room list from before a membership change is read again, and a board that keeps naming a later head is not followed', async () => {
+  const fake = await fakeBoard('moved');
+  try {
+    const { state } = fake;
+    const lists = () => state.asked.filter(path => path === '/v1/rooms').length;
+    const head = n => ({ seq: n, hash: state.entries[n - 1].hash });
+    const withHead = chain => real => ({ rooms: real.rooms.map(r => ({ ...r, chain })) });
+    // The list names the head the record has: it is read once.
+    state.rooms = withHead(head(12));
+    assert.equal((await fake.run(['verify'])).code, 0);
+    assert.equal(lists(), 1);
+
+    // The list this run begins with is from before the last entry, and names a member that is no longer in the
+    // room. The record then read ends one entry later, so the list is read again, and that one is judged.
+    state.asked.length = 0;
+    let asked = 0;
+    state.rooms = real => (++asked === 1 ? { rooms: real.rooms.map(r => ({ ...r, others: [...r.others, 'member-9'], chain: head(11) })) } : withHead(head(12))(real));
+    const moved = await fake.run(['verify']);
+    assert.equal(moved.code, 0, moved.all);
+    assert.match(moved.stdout, /compared {2}2 cards, 7 messages and 2 members with 12 entries/);
+    assert.equal(lists(), 2);
+
+    // A second list that still names the departed member is judged as it stands: the room does not verify.
+    state.asked.length = 0;
+    asked = 0;
+    state.rooms = real => ({ rooms: real.rooms.map(r => ({ ...r, others: [...r.others, 'member-9'], chain: ++asked === 1 ? head(11) : head(12) })) });
+    const stays = await fake.run(['verify']);
+    assert.equal(stays.code, 5, stays.all);
+    assert.match(stays.stdout, /differs {3}member member-9 is in the room, but the last entry of the record about that member is not one that adds it/);
+
+    // A list that names a later head every time: three tries, then uncertain. Never a pass, never a failed room.
+    state.asked.length = 0;
+    state.rooms = withHead({ seq: 13, hash: 'ab'.repeat(32) });
+    const ahead = await fake.run(['verify']);
+    assert.equal(ahead.code, 3, ahead.all);
+    assert.match(ahead.stderr, /uncertain: room a-x kept changing while it was being checked/);
+    assert.equal(lists(), 4, 'the first list and one more for each of three tries');
+
+    // A list that names another hash for the same entry, both times.
+    state.rooms = withHead({ seq: 12, hash: 'ab'.repeat(32) });
+    const two = await fake.run(['verify']);
+    assert.equal(two.code, 5, two.all);
+    assert.match(two.stdout, /differs {3}the board named two different heads within this one run/);
+
+    // A room that is gone from the second list.
+    asked = 0;
+    state.rooms = real => (++asked === 1 ? withHead(head(11))(real) : { rooms: [] });
+    const gone = await fake.run(['verify']);
+    assert.equal(gone.code, 3, gone.all);
+    assert.match(gone.stderr, /uncertain: room a-x was listed for this key when the check began and is not now/);
+  } finally {
+    await fake.close();
+  }
+});
+
+test('of each entry only its own members are kept, whatever more a board sends with it', async () => {
+  const entry = JSON.parse(readFileSync(join(ROOT, 'partner-pack', 'vectors', 'chain-1.json'), 'utf8')).rooms[0].entries[2].entry;
+  assert.deepEqual(keptEntry({ ...entry, padding: 'x'.repeat(15000), more: { nested: [1, 2, 3] } }), entry);
+  assert.deepEqual(Object.keys(keptEntry({})), ['seq', 'kind', 'card', 'actor', 'time', 'payload', 'prev', 'hash']);
+  // A member that is longer than one may be, or not a text, a number or null, is not kept either.
+  const odd = keptEntry({ ...entry, kind: 'k'.repeat(65), actor: ['supplier-a'], time: { at: 1 } });
+  assert.deepEqual([odd.kind, odd.actor, odd.time, odd.hash], [undefined, undefined, undefined, entry.hash]);
+
+  const fake = await fakeBoard('padded');
+  try {
+    const { state } = fake;
+    state.chain = (url, real) => ({ ...real, entries: real.entries.map(e => ({ ...e, padding: 'x'.repeat(15000) })) });
+    const padded = await fake.run(['verify']);
+    assert.equal(padded.code, 0, padded.all);
+    assert.match(padded.stdout, /^room a-x: verified$/m);
+    state.chain = (url, real) => ({ ...real, entries: real.entries.map(e => (e.seq === 5 ? { ...e, kind: 'k'.repeat(65) } : e)) });
+    const long = await fake.run(['verify']);
+    assert.equal(long.code, 5, long.all);
+    assert.match(long.stdout, /differs {3}entry 5 is missing, out of order or not in the shape of an entry/);
+  } finally {
+    await fake.close();
   }
 });
 

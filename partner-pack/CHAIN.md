@@ -49,6 +49,12 @@ What it does not tell you, stated plainly:
 - **Withheld text is not compared.** A key of class `fields` does not receive titles and texts written by other
   organisations, so it cannot recompute their hashes. It checks the links, the saved head, authors, times, stages
   and its own organisation's texts, and says for how many cards and messages it left the title or text out.
+  Which texts are its own, the client decides by the author's name and not only by the board's `mine` flag
+  (section 7). In a shared room it knows its own handle only from the board: at the first check of a shared room
+  that handle is the board's word, and so is the statement that the room is a shared room and not a pair room.
+- **A board can keep the check busy.** The client stops at 2,000,000 entries and follows no list that does not
+  end, but nothing bounds the time of a whole run when a board answers slowly or asks the client to wait. A run
+  that did not end is not a pass.
 - **A hash is not secret text, but it confirms a guess.** The record gives every member, `fields` keys included,
   the SHA-256 of each payload. Nobody can read a text out of it. Someone who guesses a whole payload exactly
   (the text, and for a card or message also its ids) can confirm the guess.
@@ -258,7 +264,8 @@ This is what `node p2p.mjs verify [room]` does for each room. A client of your o
    times at most. Do not follow a board without end: read no entry beyond the head first named (what came later
    is for the next run), stop when a page brings fewer entries than the record is said to hold, and stop when the
    card list gives a cursor or a card twice, a page without cards, or more cards than the record has `card`
-   entries. Each of these is a failed check, not a reason to keep asking.
+   entries. Each of these is a failed check, not a reason to keep asking. Keep of each entry only `seq`,
+   `kind`, `card`, `actor`, `time`, `payload`, `prev` and `hash`, and nothing else a board may send with it.
 2. **Links.** For each entry in order: its `seq` is the previous one plus 1, starting at 1. Its `prev` is the hash
    of the entry before, or 64 zeros. Its `hash` is the SHA-256 of the entry record you build yourself from its
    parts and your room id. The head the board names is the last entry.
@@ -281,7 +288,10 @@ This is what `node p2p.mjs verify [room]` does for each room. A client of your o
 8. **Nothing left over.** Every `card`, `message`, `stage`, `claim` and `release` entry belongs to a card the
    board shows you.
 9. **Members.** For each name the room list gives for the room (yours and the others'), the last membership entry
-   whose payload hash is that of the name is a `member-added`.
+   whose payload hash is that of the name is a `member-added`. Take the names from a room list that names the
+   same head as the record you read: when the list you started from names another head, a member was added or
+   removed, or something was posted, between the two reads, so read the room list again before you judge the
+   members.
 10. **Import.** There is at most one `import` entry, and its payload hash is that of the number of entries before
     it.
 11. If everything held, **save the head** together with the time. If anything failed, keep the head you had: it
@@ -291,6 +301,21 @@ Where your key does not receive a title or a text, skip the payload comparison o
 is allowed in one case only: a key of class `fields`, for a title, text or claim note that another organisation
 wrote. A key of class `text` receives every title and text, and a `fields` key receives its own organisation's.
 If one of those is `null` or missing, the board held something back from the check: the room does not verify.
+
+Do not take the board's word alone for what another organisation wrote. The board marks each card, message and
+claim with `mine` and `untrusted`, and a dishonest board could mark your own text as someone else's and leave it
+out. So a `fields` key also goes by the name of the author (`reporter`, `author`, or `by` of a claim). A text is
+yours, and must be there, when the board marks it as yours or when its author's name is one of these:
+
+- in a pair room, the organisation id in your own key id (the part before the `/`);
+- the name the room list gives as `you` in this run;
+- the name the room list gave as `you` at the first check of this room that verified. The client saves it beside
+  the head, as `you` in `chain-heads.json`. A saved head from before this was added has none, and gets the name
+  of the next check that verifies.
+
+What this leaves open: at the first check of a shared room the client has only the board's word for its own
+handle, and for the room being a shared room. On an honest board a handle is never an organisation id that
+existed when the handle was given, and a member keeps its handle for as long as the room exists.
 
 What the check cannot tell about claims: a claim that the board shows must be in the record, so one that was put
 on a card without its entry, or whose note or time was changed, is found. A claim that is missing from a card is

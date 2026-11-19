@@ -355,7 +355,7 @@ async fn a_fields_key_gets_no_text_from_the_other_side() {
 #[tokio::test]
 async fn the_gate_refuses_never_list_content_and_stores_nothing() {
     let p = pair();
-    for (text, rule) in [("exit seen at 203.0.113.7", "ip_address"), ("the key is sk-abcdefghijklmnop123", "secret_token"),
+    for (text, rule) in [("request came from 203.0.113.7", "ip_address"), ("the key is sk-abcdefghijklmnop123", "secret_token"),
                          ("write to someone@example.org", "email_address"), ("we owe you 13.30 USD", "money_amount"),
                          ("seen at é203.0.113.7", "ip_address"), ("zero\u{200B}width", "invisible_character"),
                          ("use p2p-abcd-abcd-abcd-abcd-abcd-abcd to join", "enrollment_code")] {

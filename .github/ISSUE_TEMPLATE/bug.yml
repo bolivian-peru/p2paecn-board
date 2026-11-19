@@ -7,7 +7,7 @@ body:
       value: |
         **Do not report a security problem here.** Use "Report a vulnerability" under the repository's Security tab. See SECURITY.md.
 
-        Leave out anything private: no keys, enrollment codes, real organisation names, addresses or card text from a real board. Use invented examples such as `supplier-a` and `reseller-x`.
+        Leave out anything private: no keys, enrollment codes, real organisation names, addresses or card text from a real board. Use invented examples such as `supplier-a` and `reseller-x`. Output of cargo, also inside the output of `./demo.sh`, holds the path of your clone: replace it before you paste.
   - type: dropdown
     id: part
     attributes:

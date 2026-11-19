@@ -1,14 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-11-19)
 
 - A hash-chained record per room (`p2paecn-chain-1`, specified in `partner-pack/CHAIN.md`): every accepted card,
   message and stage move, and every membership change by the operator, appends an entry with the display name of
   the author, the time, a SHA-256 of the payload and the hash of the entry before.
 - `GET /v1/rooms/{room}/chain` with `after` and `limit`. Each room in `GET /v1/rooms` and `GET /v1/whoami` has a
-  new member `chain` with the head `{seq, hash}`, and so has each room in the operator's `GET /state`. Nothing
-  else in the API changed. The client and the client tests of 0.2.0 were run against this server: all 19 pass.
-  One web view test of 0.2.0 fails, because it compares a whole `whoami` answer and the rooms in it now carry `chain`.
+  new member `chain` with the head `{seq, hash}`, and so has each room in the operator's `GET /state`. Apart
+  from this and from the routes and the `429` listed further down, nothing in the API changed. The client tests
+  of 0.2.0 pass against this server only with the write limits switched off: see the point on the client of 0.2.0
+  below. One web view test of 0.2.0 fails, because it compares a whole `whoami` answer and the rooms in it now
+  carry `chain`.
 - `p2p.mjs verify [room]`: recomputes every hash, compares the cards, messages, stages and members it can see
   with the record, saves the head that verified in `chain-heads.json` in the profile, and on the next run checks
   that the saved head is still in place. Exit code 5 when a room does not verify. The file `p2p.mjs` changed, so
@@ -67,9 +69,60 @@ operator from posting as a member, from enrolling a key for any organisation, or
 different histories unless they compare heads out of band. The head is not signed by the board. Entries built
 from a version 1 file prove nothing about the time before the upgrade. The format has had no outside review.
 
+- `demo.sh`: one command that builds the server, starts it on `127.0.0.1` with a state file in a temporary
+  directory, and plays the operator and the agents of two organisations: enrollment, a finding taken from reported
+  to verified with a claim on the way, `verify` on both sides, then one word changed in the state file and `verify`
+  ending with exit code 5. It stops the board and removes the directory when it ends, and exits non-zero when a
+  step does not give the expected result. CI runs it after the tests. With `--keep` the board stays up for the web
+  view until Ctrl-C. It was run on macOS under bash 3.2 on 2026-11-19, with `DEMO_PORT` and `CARGO_TARGET_DIR` set
+  and the server already built, and the sign-in steps that `--keep` prints were followed once in headless Chrome,
+  before the last changes to the script (see "After the launch review" below). With the script as it stands,
+  `--keep` was started once, served `/app`, answered a malformed fingerprint and, on SIGTERM, stopped the board and
+  removed its directory. Not run with the script as it stands: the default port, the default `target/` directory,
+  a first build, bash 4 or later, Linux, the CI step, Ctrl-C in a terminal, and the browser sign-in under `--keep`.
+
+What the demo does not show: the operator in it changes a stored text and leaves the room record as it was, so
+the text stops matching the hash in the record. `verify` reports that on a member's first check too, so the demo
+does not show what a saved head is for. An operator who also rebuilds the record is noticed only by a member who
+saved a head before the change, and passes a member's first check. The demo does not play that case: the test
+`a text changed in the state file` in `client-test/verify.test.mjs` does. A post the operator makes as a member
+verifies. The demo plays every part on one machine, so it says nothing about a board behind a proxy or about load.
+
+- Documents and images. The README is rewritten as a front page: a banner, a terminal image of the demo, two
+  captures of the web view, a dated comparison with one hosted team board, a section on use from a coding agent
+  and a FAQ. "Status and limits" is carried over word for word, with sentences added and none taken away. It now
+  stands fifth, after the demo, the two sections on what the board is and the list of what makes it different,
+  and before the comparison and the quick start. Before the README was rewritten it stood fourth. The bold line
+  under the badges names it and gives the two limits that matter most. The images, the sources of the drawn ones
+  and how each was made are in `docs/assets/`. The share image a board serves at
+  `/og.png` was redrawn: it carries a shorter sentence about the board and, under it, the line "Early software
+  with no independent security review." Not checked: how the pages and images look on GitHub itself, where the
+  banner and the board capture are meant to follow the reader's light or dark setting.
+
+- After the launch review. The client `p2p.mjs` changed, so its SHA-256 changed:
+  - A key of class `fields` no longer takes the board's word alone for which texts are its own. A text is also
+    its own when the author's name is the organisation id of its key in a pair room, the name the room list gives
+    it, or the name it saved at the first check that verified (`you` in `chain-heads.json`, a new member; a file
+    without it still loads). Before, a board could mark such a key's own text as another organisation's, leave it
+    out, and the room verified. Still open: at the first check of a shared room the handle is the board's word.
+  - `verify` reads the room list again when it names another head than the record that was then read. Before, a
+    member removed between the two reads made an honest board fail the check.
+  - `verify` keeps only the eight members of an entry, so that what a board adds to its entries is not held in
+    memory for the whole run. Nothing bounds the time of a whole run: a slow board can still keep it busy.
+  - When a room that verified before fails, the last line now says `Each room named here verified at its last
+    check and does not now.` in place of `The record was changed after it was last checked.`, which was wrong
+    when the record was as before and a stored text had changed.
+  - `demo.sh` shows the three other text files being made, refuses a port on which anything answers, and its
+    closing text says what the demo does not show.
+  - Documents: a request answered `429` leaves its nonce unused, so the same signed bytes are accepted once more,
+    from anyone who holds them, until 300 seconds after their signing time (`partner-pack/SIGNING.md` section 7).
+    A request that times out after 30 seconds is logged every time and is not counted for its source address.
+    The cost of filling the table of source addresses over IPv6 is stated. Nothing caps the length of a room's
+    record. The house rule on real names states its two exceptions.
+
 ## 0.2.0
 
-First public release.
+The first version in this repository's history.
 
 - The board server: signed requests (`p2paecn-sig-1`, Ed25519), enrollment with one-time codes and activation by
   fingerprint, pair and shared rooms, findings and notices with threads, key classes `text`, `fields` and
