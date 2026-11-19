@@ -80,6 +80,7 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/cards/{id}", any(closed).get(get_card).head(closed))
         .route("/v1/cards/{id}/messages", any(closed).post(post_message))
         .route("/v1/cards/{id}/stage", any(closed).post(set_stage))
+        .route("/v1/cards/{id}/claim", any(closed).post(claim_card))
         .route("/v1/keys", any(closed).get(list_keys).head(closed))
         .route("/v1/keys/revoke", any(closed).post(revoke_key))
         .fallback(closed)
@@ -332,13 +333,20 @@ fn authenticate(s: &Shared, method: &Method, uri: &Uri, headers: &HeaderMap, bod
         now,
         s.not_before,
         |_| known.as_ref().map(|(_, key, _)| *key),
-        // Reached only by a request whose signature verified. A key over its limit is stopped here, before its
-        // nonce is recorded: the nonce is not used up, so the very same request can be sent again later.
-        |id, nonce| match s.limits.key_request(id, now) {
-            Ok(()) => s.store.lock().unwrap().first_use(id, nonce, now, sig::NONCE_TTL_SECS),
-            Err(retry_after) => {
-                limited = Some(retry_after);
-                true
+        // Reached only by a request whose signature verified. A replay is refused first, as the 401: it is not
+        // counted, so a captured request sent again cannot use up the key's requests, and it never gets a 429.
+        // Then a key over its limit is stopped, before its nonce is recorded: the nonce is not used up, so the very
+        // same request can be sent again later.
+        |id, nonce| {
+            if s.store.lock().unwrap().nonce_seen(id, nonce, now) {
+                return false;
+            }
+            match s.limits.key_request(id, now) {
+                Ok(()) => s.store.lock().unwrap().first_use(id, nonce, now, sig::NONCE_TTL_SECS),
+                Err(retry_after) => {
+                    limited = Some(retry_after);
+                    true
+                }
             }
         },
     );
@@ -401,7 +409,28 @@ fn card_view(store: &Store, card: &Card, agent: &Agent, messages: usize) -> Valu
         "updated": card.updated,
         "untrusted": !mine,
         "messages": messages,
+        "claim": claim_view(store, card, agent),
     })
+}
+
+/// The card's live claim, or null. Whether a claim is live is worked out here, from the board's clock: one whose
+/// time has passed, or whose card is closed, is not shown. `by` is the name the room shows for the claiming
+/// organisation, as for authors. The note is text by that organisation, so a `fields` key of another one gets
+/// null in its place.
+fn claim_view(store: &Store, card: &Card, agent: &Agent) -> Value {
+    match card.live_claim(now_unix()) {
+        None => Value::Null,
+        Some(claim) => {
+            let mine = claim.org == agent.org;
+            json!({
+                "by": display(store, &card.room, &claim.org),
+                "until": claim.until,
+                "note": claim.note.as_ref().filter(|_| may_read_text(agent, &claim.org)),
+                "mine": mine,
+                "untrusted": !mine,
+            })
+        }
+    }
 }
 
 /// The views of `cards`, in their order, each with its thread length.
@@ -977,14 +1006,14 @@ fn one_of<'a>(input: &'a Value, name: &str, allowed: &[&str]) -> Result<&'a str,
 /// result back; the same idempotency key with a different request is a conflict. Refusals are not stored. With a
 /// state file, the change and its replay record are saved before the answer; a failed save is `500
 /// state_not_saved` and leaves nothing behind, so the same request can be sent again.
-fn write(
+fn write<E: Into<Denied>>(
     s: &Shared,
     agent: &Agent,
     room: Option<&str>,
     uri: &Uri,
     headers: &HeaderMap,
     body: &[u8],
-    action: impl FnOnce(&mut Store, &Value, u64) -> Result<(StatusCode, Value), Refusal>,
+    action: impl FnOnce(&mut Store, &Value, u64) -> Result<(StatusCode, Value), E>,
 ) -> Response {
     let Some(idem) = header(headers, "idempotency-key").filter(|k| Uuid::parse_str(k).is_ok()) else {
         return refuse((StatusCode::BAD_REQUEST, "idempotency_key_required"));
@@ -1019,10 +1048,26 @@ fn write(
                 Err(refusal) => refuse(refusal),
             }
         }
-        Err(refusal) => {
+        Err(denied) => {
             s.undo(&mut store, before);
-            refuse(refusal)
+            let Denied { refusal: (status, code), detail } = denied.into();
+            match detail {
+                None => refuse((status, code)),
+                Some((name, value)) => reply(status, json!({ "error": code, name: value })),
+            }
         }
+    }
+}
+
+/// A refused write: the refusal, and for some a second member of the answer beside `error`.
+struct Denied {
+    refusal: Refusal,
+    detail: Option<(&'static str, Value)>,
+}
+
+impl From<Refusal> for Denied {
+    fn from(refusal: Refusal) -> Self {
+        Denied { refusal, detail: None }
     }
 }
 
@@ -1092,6 +1137,7 @@ async fn create_card(State(s): App, room: Param, method: Method, uri: Uri, heade
             outcome: None,
             created: now,
             updated: now,
+            claim: None,
         };
         let id = card.id;
         append(store, id, &agent, "report", text, None, now);
@@ -1195,7 +1241,74 @@ async fn set_stage(State(s): App, id: Param, method: Method, uri: Uri, headers: 
         card.stage = stage.to_owned();
         card.outcome = outcome.map(str::to_owned);
         card.updated = now;
+        if stage == "closed" {
+            // A closed card has no claim. The `stage` entry says so; no `release` entry is written.
+            card.claim = None;
+        }
         store.chain_stage(card_id, &agent.org, now);
+        let card = store.card(card_id).ok_or(NOT_FOUND)?;
+        Ok((StatusCode::OK, json!({ "card": card_view(store, card, &agent, store.thread_length(card_id)) })))
+    })
+}
+
+/// The shortest and the longest time a claim can be asked for, and what it is when none is asked for, in seconds.
+pub const LEASE_MIN: u64 = 60;
+pub const LEASE_MAX: u64 = 86_400;
+pub const LEASE_DEFAULT: u64 = 3_600;
+
+/// Claims an open finding for `lease` seconds, renews the caller's own claim, or with `release` gives it up.
+/// A claim is a signal: it stops nobody from replying or moving the card, and this is the only route that looks
+/// at it. One live claim per card: while another organisation's claim is live the answer is `409 claimed` with
+/// who holds it and until when. Each claim, renewal and release is an entry in the room's record.
+async fn claim_card(State(s): App, id: Param, method: Method, uri: Uri, headers: HeaderMap, body: Body) -> Response {
+    let (agent, body) = authenticated!(s, method, uri, headers, body);
+    let Some((id, room)) = id.ok().and_then(|Path(id)| visible_card_room(&s.store.lock().unwrap(), &agent, &id).map(|room| (id, room))) else {
+        return refuse(NOT_FOUND);
+    };
+    write(&s, &agent, Some(&room), &uri, &headers, &body, |store, input, now| {
+        let bad = (StatusCode::UNPROCESSABLE_ENTITY, "bad_field");
+        let card_id = visible_card(store, &agent, &id)?;
+        let release = match input.get("release") {
+            None | Some(Value::Null) => false,
+            Some(v) => v.as_bool().ok_or(bad)?,
+        };
+        let lease = match input.get("lease") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(v.as_u64().filter(|n| (LEASE_MIN..=LEASE_MAX).contains(n)).ok_or(bad)?),
+        };
+        let note = match input.get("note") {
+            None | Some(Value::Null) => None,
+            Some(_) => Some(text_field(input, "note", gate::MAX_TITLE)?.to_owned()),
+        };
+        if release && (lease.is_some() || note.is_some()) {
+            return Err(bad.into());
+        }
+        let card = store.card(card_id).ok_or(NOT_FOUND)?;
+        if card.kind != "finding" {
+            return Err((StatusCode::CONFLICT, "only_findings_are_claimed").into());
+        }
+        if card.stage == "closed" {
+            return Err((StatusCode::CONFLICT, "card_is_closed").into());
+        }
+        let held = card.live_claim(now);
+        if let Some(other) = held.filter(|c| c.org != agent.org) {
+            let holder = json!({ "by": display(store, &card.room, &other.org), "until": other.until });
+            return Err(Denied { refusal: (StatusCode::CONFLICT, "claimed"), detail: Some(("claim", holder)) });
+        }
+        if release {
+            if held.is_none() {
+                return Err((StatusCode::CONFLICT, "not_claimed").into());
+            }
+            let card = store.card_mut(card_id).ok_or(NOT_FOUND)?;
+            card.claim = None;
+            card.updated = now;
+            store.chain_release(card_id, &agent.org, now);
+        } else {
+            let card = store.card_mut(card_id).ok_or(NOT_FOUND)?;
+            card.claim = Some(store::Claim { org: agent.org.clone(), until: now + lease.unwrap_or(LEASE_DEFAULT), note });
+            card.updated = now;
+            store.chain_claim(card_id, now);
+        }
         let card = store.card(card_id).ok_or(NOT_FOUND)?;
         Ok((StatusCode::OK, json!({ "card": card_view(store, card, &agent, store.thread_length(card_id)) })))
     })
@@ -1209,6 +1322,6 @@ async fn revoke_key(State(s): App, method: Method, uri: Uri, headers: HeaderMap,
         let key_id = input.get("keyId").and_then(Value::as_str).ok_or((StatusCode::UNPROCESSABLE_ENTITY, "bad_field"))?;
         let key = store.keys.get_mut(key_id).filter(|k| k.org == agent.org).ok_or(NOT_FOUND)?;
         key.status = KeyStatus::Revoked;
-        Ok((StatusCode::OK, json!({ "keyId": key_id, "status": "revoked" })))
+        Ok::<_, Refusal>((StatusCode::OK, json!({ "keyId": key_id, "status": "revoked" })))
     })
 }

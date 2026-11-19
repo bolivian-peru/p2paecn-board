@@ -172,6 +172,19 @@ pub struct EnrollCode {
     pub label: Option<String>,
 }
 
+/// A member's statement that it is working on a card, for a stated time. A signal to the other members, not a
+/// lock: it stops nobody from replying or moving the card. It counts only while `until` is in the future
+/// (`Card::live_claim`); nothing removes it when that time passes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Claim {
+    pub org: String,
+    /// Unix seconds. The claim is live while this is later than the board's clock.
+    pub until: u64,
+    /// A short note by the claiming organisation, through the content gate like any text.
+    pub note: Option<String>,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Card {
@@ -186,6 +199,16 @@ pub struct Card {
     pub outcome: Option<String>,
     pub created: u64,
     pub updated: u64,
+    /// Absent from state files written before claims existed, and from cards nobody claimed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim: Option<Claim>,
+}
+
+impl Card {
+    /// The claim, while it counts: its time has not passed and the card is not closed.
+    pub fn live_claim(&self, now: u64) -> Option<&Claim> {
+        self.claim.as_ref().filter(|c| c.until > now && self.stage != "closed")
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -267,6 +290,11 @@ impl Store {
         self.nonces.insert((key_id.to_owned(), nonce.to_owned()), now + ttl).is_none()
     }
 
+    /// Whether this key already used this nonce inside the window. Records nothing.
+    pub fn nonce_seen(&self, key_id: &str, nonce: &str, now: u64) -> bool {
+        self.nonces.get(&(key_id.to_owned(), nonce.to_owned())).is_some_and(|expiry| *expiry > now)
+    }
+
     /// How many nonces are remembered.
     pub fn nonce_count(&self) -> usize {
         self.nonces.len()
@@ -307,6 +335,20 @@ impl Store {
         let Some(card) = self.cards.iter().find(|c| c.id == card) else { return };
         let Some(room) = self.rooms.get(&card.room) else { return };
         chain::stage_set(self.chains.entry(room.id.clone()).or_default(), room, card, room.display_name(org), now);
+    }
+
+    /// Appends the `claim` entry for a claim that was just set on a card, new or renewed.
+    pub fn chain_claim(&mut self, card: Uuid, now: u64) {
+        let Some(card) = self.cards.iter().find(|c| c.id == card) else { return };
+        let (Some(room), Some(claim)) = (self.rooms.get(&card.room), &card.claim) else { return };
+        chain::claimed(self.chains.entry(room.id.clone()).or_default(), room, card.id, claim, now);
+    }
+
+    /// Appends the `release` entry for a claim that `org` just gave up.
+    pub fn chain_release(&mut self, card: Uuid, org: &str, now: u64) {
+        let Some(card) = self.cards.iter().find(|c| c.id == card) else { return };
+        let Some(room) = self.rooms.get(&card.room) else { return };
+        chain::released(self.chains.entry(room.id.clone()).or_default(), room, card.id, room.display_name(org), now);
     }
 
     /// How many messages a card's thread holds: the report, every reply, proof, correction and ack, and one
@@ -414,7 +456,8 @@ impl Store {
 
     /// Removes an org from a shared room. Its past cards and messages stay, under its handle. Its open findings
     /// there are closed as withdrawn: it can no longer close them, and in a shared room nobody else may. The chain
-    /// gets one `member-removed` entry and then one `stage` entry for each finding closed this way.
+    /// gets one `member-removed` entry and then one `stage` entry for each finding closed this way. A live claim
+    /// the member holds on another member's card is taken off, with a `release` entry by the operator.
     pub fn remove_member(&mut self, room_id: &str, org: &str, now: u64) -> Result<(), Refusal> {
         let room = self.rooms.get_mut(room_id).ok_or(NOT_FOUND)?;
         if room.kind != RoomKind::Shared {
@@ -430,7 +473,14 @@ impl Store {
             card.stage = "closed".to_owned();
             card.outcome = Some("withdrawn".to_owned());
             card.updated = now;
+            card.claim = None;
             chain::stage_set(entries, room, card, chain::OPERATOR, now);
+        }
+        for card in self.cards.iter_mut().filter(|c| c.room == room_id && c.claim.as_ref().is_some_and(|claim| claim.org == org)) {
+            if card.live_claim(now).is_some() {
+                chain::released(entries, room, card.id, chain::OPERATOR, now);
+            }
+            card.claim = None;
         }
         Ok(())
     }

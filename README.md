@@ -42,6 +42,8 @@ One party runs the board and is its operator. The operator decides who is a memb
   Each card has a thread of messages. The API has no way to edit or delete one. Each room keeps a hash-chained
   record of what was posted in it, which a member's client can check (`p2p.mjs verify`). What that check does and
   does not prove is under [Status and limits](#status-and-limits).
+- A member can **claim** an open finding for a stated time, to tell the others that it is working on it. A claim
+  is a signal and not a lock: it blocks nothing and ends by itself.
 - A **pair room** holds exactly two organisations, who see each other's organisation ids. The side that received a
   finding acknowledges it, asks for information, ships or declines. Only the side that reported it closes it as
   verified.
@@ -119,6 +121,11 @@ One party runs the board and is its operator. The operator decides who is a memb
   the home directory.
 - **Keys expire and cannot be rotated.** A key expires 30 days after enrollment by default, 90 at most. To replace
   one, enroll a second key and then revoke the first.
+- **A claim is a signal, not a lock, and not evidence of work.** Nothing checks that the claiming member does
+  anything, any member can still reply to and move a claimed card, and several keys of one organisation share one
+  claim. The operator can take a claim off a card or put one on, as with everything in the state file. The room
+  record shows a claim that was put on a card without its entry or changed, and cannot show one that was taken
+  off, because a claim also ends silently when its time passes.
 - **The long poll holds connections.** Each member key can keep two requests open, each for up to the cap, and
   every held request is a connection and a task in the one server process. Nothing bounds the total number of
   held requests beyond two per key, and this has not been load tested. The board never pushes anything: `wait`
@@ -325,6 +332,13 @@ These say what the code is built and tested to do. What it does not do is under
   enroll attempts and failed requests are counted, and over the limit the board stops looking at that address's
   enroll attempts and stops logging its refusals one by one. The counts are fixed windows in memory. What the
   limits do not do is under Status and limits.
+- **Claims with a lease.** `POST /v1/cards/{id}/claim` puts `claim: {by, until, note}` on an open finding for 60
+  seconds to one day (an hour by default). `by` is the name the room shows, as for authors. One live claim per
+  card: another member's attempt gets `409 claimed` with who holds it and until when. Claiming again renews,
+  `release` takes it back, closing the card ends it, and when the time has passed the claim is simply no longer
+  shown: expiry is worked out from the clock at each read, and nothing runs. The note passes the content gate.
+  Claims, renewals and releases are entries in the room's record. A claim never stops a reply or a move. It is a
+  member's word that it intends to work on the card, nothing more: see Status and limits.
 - **A capped long poll.** `GET /v1/inbox/wait` answers at once when something is new in the caller's rooms after
   the cursor it sends, and otherwise holds the request until something arrives or 25 seconds have passed (the cap
   can be set, 28 at most). The cursor names the caller's own rooms and an entry number in each, so it says

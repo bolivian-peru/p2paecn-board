@@ -33,7 +33,7 @@ pub const IMPORT: &str = "*import";
 pub struct Entry {
     /// From 1, without gaps.
     pub seq: u64,
-    /// `member-added`, `member-removed`, `card`, `message`, `stage` or `import`.
+    /// `member-added`, `member-removed`, `card`, `message`, `stage`, `claim`, `release` or `import`.
     pub kind: String,
     /// The card the entry is about. `None` for membership and import entries.
     pub card: Option<Uuid>,
@@ -90,6 +90,10 @@ pub enum Payload<'a> {
     /// Any message after the report, the text of a stage move included (its message kind is `stage`).
     Message { id: &'a str, kind: &'a str, replaces: &'a str, text: &'a str },
     Stage { stage: &'a str, outcome: &'a str },
+    /// A claim on a card, new or renewed: the time it runs to, in decimal, and its note.
+    Claim { until: &'a str, note: &'a str },
+    /// A claim given up before its time. No fields.
+    Release,
     /// Closes the entries built from an older state file. `entries` is how many stand before it, in decimal.
     Import { entries: &'a str },
 }
@@ -102,6 +106,8 @@ impl Payload<'_> {
             Payload::Card { .. } => "card",
             Payload::Message { .. } => "message",
             Payload::Stage { .. } => "stage",
+            Payload::Claim { .. } => "claim",
+            Payload::Release => "release",
             Payload::Import { .. } => "import",
         }
     }
@@ -116,6 +122,8 @@ impl Payload<'_> {
             }
             Payload::Message { id, kind, replaces, text } => record(&what, &[("id", id), ("kind", kind), ("replaces", replaces), ("text", text)]),
             Payload::Stage { stage, outcome } => record(&what, &[("stage", stage), ("outcome", outcome)]),
+            Payload::Claim { until, note } => record(&what, &[("until", until), ("note", note)]),
+            Payload::Release => record(&what, &[]),
             Payload::Import { entries } => record(&what, &[("entries", entries)]),
         }
     }
@@ -213,6 +221,18 @@ pub fn message_posted(chain: &mut Vec<Entry>, room: &Room, m: &Message) {
 pub fn stage_set(chain: &mut Vec<Entry>, room: &Room, card: &Card, actor: &str, time: u64) {
     let payload = Payload::Stage { stage: &card.stage, outcome: card.outcome.as_deref().unwrap_or("") };
     append(chain, &room.id, &payload, Some(card.id), actor, time);
+}
+
+/// A claim on a card, by the organisation that holds it, entered under the name the room shows for it.
+pub fn claimed(chain: &mut Vec<Entry>, room: &Room, card: Uuid, claim: &crate::store::Claim, time: u64) {
+    let until = claim.until.to_string();
+    let payload = Payload::Claim { until: &until, note: claim.note.as_deref().unwrap_or("") };
+    append(chain, &room.id, &payload, Some(card), room.display_name(&claim.org), time);
+}
+
+/// A claim given up. `actor` is a display name, or `OPERATOR` when a member's removal took it off.
+pub fn released(chain: &mut Vec<Entry>, room: &Room, card: Uuid, actor: &str, time: u64) {
+    append(chain, &room.id, &Payload::Release, Some(card), actor, time);
 }
 
 /// The stage a card of this kind starts in. A card still in it has no `stage` entry.

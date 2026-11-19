@@ -366,6 +366,39 @@ test('a field of an unknown shape is "?" and a text this key does not get is sai
   assert.match(app.dataBlock('x'.repeat(4100), false), /\| x{4000} \[cut: longer than the board allows\]\n/);
 });
 
+test('a live claim is shown from checked parts, its note as cleaned text, and not at all once its time has passed', () => {
+  const now = 1794850000;
+  const theirs = { by: 'reseller-x', until: now + 720, note: 'Tracing it in the export job.', mine: false, untrusted: true };
+  assert.deepEqual(app.claimOf(card({ claim: theirs }), now), { mine: false, by: 'reseller-x', until: now + 720, note: 'Tracing it in the export job.' });
+  assert.equal(app.claimLine(app.claimOf(card({ claim: theirs }), now), now), 'Claimed by reseller-x, in 12 min');
+  assert.equal(app.claimLine(app.claimOf(card({ claim: theirs }), now), now, true),
+    `Claimed by reseller-x until ${app.isoTime(now + 720)} (in 12 min). A claim is a signal from a member, not a lock: anyone may still reply.`);
+  const own = app.claimOf(card({ claim: { by: 'supplier-a', until: now + 7200, note: null, mine: true, untrusted: false } }), now);
+  assert.deepEqual([own.mine, own.note, app.claimLine(own, now)], [true, '', 'Claimed by your organisation, in 2 h']);
+  // No claim, a claim whose time has passed, and anything that is not in the shape of a claim: nothing is shown.
+  for (const claim of [null, undefined, 'yes', 7, { by: 'reseller-x', until: now }, { by: 'reseller-x', until: now - 1 }, { by: 'reseller-x', until: 'soon' },
+    { by: 'reseller-x', until: -5 }, { by: 'reseller-x' }]) {
+    assert.equal(app.claimOf(card({ claim }), now), null, JSON.stringify(claim));
+  }
+  assert.equal(app.claimOf(card({ claim: theirs }), 'now'), null, 'without a clock nothing is called live');
+  assert.equal(app.claimOf(card({}), now), null, 'a card from a board that knows no claims');
+  // A holder of an unknown shape is "?". A claim that says it is ours but is marked untrusted is not ours.
+  const odd = app.claimOf(card({ claim: { by: '<b>The Boss</b>', until: now + 60, note: 7, mine: true, untrusted: true } }), now);
+  assert.deepEqual(odd, { mine: false, by: '?', until: now + 60, note: '' });
+  assert.equal(app.claimLine(odd, now), 'Claimed by ?, in 1 min');
+  // The note is board text: one line, invisible characters out, cut to what the board allows.
+  const hidden = app.claimOf(card({ claim: { ...theirs, note: `First\nsecond \u202eline\u200b ${'x'.repeat(300)}` } }), now);
+  assert.ok(hidden.note.startsWith('First second line x') && !/[\n\u202e\u200b]/.test(hidden.note));
+  assert.ok(hidden.note.length < 260 && hidden.note.endsWith('[cut: longer than the board allows]'));
+  // On the page both go in as text, through the one function that sets textContent.
+  const js = readFileSync(APP_FILE, 'utf8');
+  for (const line of ["setText(li.refs.claim, claim ? claimLine(claim, boardNow()) : '');", "setText(claimNote, claim ? claimLine(claim, boardNow(), true) : '');", 'setText(claimText, claim?.note ?']) {
+    assert.ok(js.includes(line), line);
+  }
+  assert.match(js, /function setText\(node, value\) \{[^}]*textContent/);
+  assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML|document\.write/.test(js));
+});
+
 test('the board copied as Markdown: members, counts and open cards, titles fenced', () => {
   const cards = [hostileCard, card({ id: 'f84a462b-5a91-4c31-9b6a-b41316b96dce', stage: 'need-info', updated: 1794957000, messages: 4 }),
     card({ id: '34728ae6-27d9-4a9c-9107-39098e8fe401', stage: 'closed', outcome: 'verified', title: 'A closed card is not listed' }),
@@ -807,6 +840,14 @@ test('every page of a room is loaded, 100 cards at a time, and a room over the l
     const answer = await app.read(asKey(other), path);
     return { ok: answer.status === 200, status: answer.status, json: answer.json };
   };
+  // A claim made through the API reaches the page's own loader, and the page's function reads it as live.
+  const claimed = await write(supplier, `/v1/cards/${(await ask('/v1/rooms/a-y/cards?limit=1')).json.cards[0].id}/claim`, { lease: 600, note: 'Looking at the last one.' });
+  assert.equal(claimed.status, 200, JSON.stringify(claimed.json));
+  const seen = (await ask('/v1/rooms/a-y/cards?limit=1')).json.cards[0];
+  const shown = app.claimOf(seen, Math.floor(Date.now() / 1000));
+  assert.deepEqual([shown.mine, shown.by, shown.note], [false, 'supplier-a', 'Looking at the last one.']);
+  assert.match(app.claimLine(shown, Math.floor(Date.now() / 1000)), /^Claimed by supplier-a, in (9|10) min$/);
+  assert.equal((await write(other, `/v1/cards/${seen.id}/claim`, {})).status, 409);
   const before = (await app.loadAllCards(ask, 'a-y')).cards.length - 230; // cards an earlier test left in the room
   paths.length = 0;
   const all = await app.loadAllCards(ask, 'a-y');

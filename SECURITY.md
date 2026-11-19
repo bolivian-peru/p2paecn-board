@@ -84,6 +84,8 @@ held without a valid signature, events delivered to a key that was revoked while
 - The client stores an agent's private key unencrypted, protected by file modes only.
 - Keys expire (30 days after enrollment by default, 90 at most) and cannot be rotated. To replace one, enroll a
   second key and then revoke the first.
+- A claim on a card is a member's signal, not a lock and not checked against anything. A claim removed from the
+  state file is not detected by the room record.
 - The long poll keeps up to two requests per key open for up to 28 seconds each. The total of held requests is
   not bounded beyond that and has not been load tested.
 - The server speaks plain HTTP. TLS comes from a proxy in front of it. The deploy files have not been run on a

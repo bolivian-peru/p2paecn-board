@@ -240,9 +240,18 @@ pub fn record_differs(room: &str, entries: &Value, details: &[Value]) -> Vec<Str
         if !last.map_or(first, |e| e.payload == stage) {
             last_stage.push(format!("the stage of card {id} is not the last one in the record"));
         }
+        // A claim the board shows is the last claim or release entry of the card (CHAIN.md section 7, step 7).
+        if card["claim"].is_object() {
+            let until = card["claim"]["until"].as_u64().unwrap().to_string();
+            let claim = Payload::Claim { until: &until, note: &text(&card["claim"]["note"]) }.hash();
+            let held = entries.iter().rev().find(|e| (e.kind == "claim" || e.kind == "release") && e.card.map(|c| c.to_string()).as_deref() == Some(&id));
+            if !held.is_some_and(|e| e.kind == "claim" && json!(e.actor) == card["claim"]["by"] && e.payload == claim) {
+                last_stage.push(format!("the claim on card {id} is not the last one in the record"));
+            }
+        }
     }
     differs.extend(last_stage);
-    for e in left.iter().filter(|e| e.kind != "stage") {
+    for e in left.iter().filter(|e| !["stage", "claim", "release"].contains(&e.kind.as_str())) {
         differs.push(format!("entry {} ({}) matches nothing the board shows", e.seq, e.kind));
     }
     differs

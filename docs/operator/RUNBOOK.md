@@ -131,6 +131,10 @@ says otherwise.
   budget, raise or switch off `P2PAECN_LIMIT_UNSIGNED`, or set `P2PAECN_SOURCE_HEADER` to the header your proxy
   writes (the board takes its last value and believes it, so the listener must be reachable through the proxy
   only). The header setting was tested with requests made in the test suite, not behind a real proxy.
+- **Claims.** A member can claim an open finding for up to a day. A claim blocks nothing and ends by itself, so
+  there is nothing for you to clear, and the operator channel has no route for it. Removing a member from a shared
+  room takes off the claims it holds (the record gets a `release` entry by `*operator`). Do not edit claims in
+  the state file: a claim that is shown without its entry makes members' `verify` fail.
 - **The long poll.** `GET /v1/inbox/wait` holds a member's request for up to 25 seconds (`P2PAECN_WAIT_SECONDS`, 1
   to 28), two requests per key at most. Your proxy must let a request stay open that long without cutting it;
   this was not run through a proxy, so check it with a member's `p2p.mjs wait` after the first enrollment. When

@@ -328,6 +328,43 @@ async fn a_wait_counts_as_one_request_against_the_keys_limit_however_long_it_is_
     assert!(b.w.shared.waits.lock().unwrap().is_empty());
 }
 
+/// Through the real listener with its real timeouts: a request held for longer than the 10 seconds a request
+/// head may take is not dropped, and an unsigned one on the same path is answered at once.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_listener_keeps_a_held_request_open_past_its_head_timeout() {
+    use std::io::{Read, Write};
+    let b = board(12);
+    let start = cursor(&b.w, &b.reseller).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(api::serve(listener, b.w.app.clone(), api::HEAD_TIMEOUT, api::REQUEST_TIMEOUT));
+    let request = signed(&b.reseller, "GET", &format!("/v1/inbox/wait?after={start}"), "", None);
+    let mut bytes = format!("GET {} HTTP/1.1\r\nhost: {HOST}\r\nconnection: close\r\n", request.uri());
+    for (name, value) in request.headers() {
+        bytes.push_str(&format!("{name}: {}\r\n", value.to_str().unwrap()));
+    }
+    bytes.push_str("\r\n");
+    let (held, unsigned) = tokio::task::spawn_blocking(move || {
+        let ask = |bytes: &[u8]| {
+            let started = Instant::now();
+            let mut stream = std::net::TcpStream::connect(addr).unwrap();
+            stream.write_all(bytes).unwrap();
+            let mut got = String::new();
+            stream.read_to_string(&mut got).unwrap();
+            (got, started.elapsed())
+        };
+        let unsigned = ask(b"GET /v1/inbox/wait?after=a-x.2&wait=12 HTTP/1.1\r\nhost: board.test\r\nconnection: close\r\n\r\n");
+        (ask(bytes.as_bytes()), unsigned)
+    })
+    .await
+    .unwrap();
+    server.abort();
+    assert!(unsigned.0.starts_with("HTTP/1.1 401") && unsigned.0.ends_with("unauthorized\n") && unsigned.1 < Duration::from_secs(1), "{unsigned:?}");
+    assert!(held.0.starts_with("HTTP/1.1 200"), "{}", held.0);
+    assert!(held.0.contains(r#""timedOut":true"#) && held.0.contains(r#""wait":12"#), "{}", held.0);
+    assert!(held.1 >= Duration::from_secs(11) && held.1 < Duration::from_secs(15), "{:?}", held.1);
+}
+
 #[tokio::test]
 async fn an_answer_holds_at_most_a_hundred_events_and_the_cursor_goes_on_from_there() {
     let b = board(1);

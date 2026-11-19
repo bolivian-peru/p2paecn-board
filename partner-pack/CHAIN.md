@@ -25,8 +25,8 @@ What a check that passes tells you:
 
 - The entries the board gave you link: each is numbered in order, names the hash of the one before it, and has the
   hash of its own content.
-- Every card, message, current stage and current member your key can see has its entry, and the record holds no
-  card, message or stage entry for something the board no longer shows you.
+- Every card, message, current stage, shown claim and current member your key can see has its entry, and the
+  record holds no card, message, stage or claim entry for something the board no longer shows you.
 - The head you saved the last time is still in the record at the same place. So nothing at or before that head was
   changed, removed or put in between since you saved it.
 
@@ -49,6 +49,8 @@ What it does not tell you, stated plainly:
 - **A hash is not secret text, but it confirms a guess.** The record gives every member, `fields` keys included,
   the SHA-256 of each payload. Nobody can read a text out of it. Someone who guesses a whole payload exactly
   (the text, and for a card or message also its ids) can confirm the guess.
+- **A claim that was taken off a card is not detected.** A claim the board shows must have its entry, but a card
+  that shows none always passes (section 7).
 - **Reads are not recorded**, and neither is anything the operator does outside rooms: creating organisations,
   issuing codes, activating and revoking keys.
 - **The time of an entry is the board's own clock.** Nothing outside the board witnesses it.
@@ -64,7 +66,7 @@ An entry has these parts:
 | Part | What it is |
 |---|---|
 | `seq` | The entry's number in its room, from 1, without gaps |
-| `kind` | `member-added`, `member-removed`, `card`, `message`, `stage` or `import` |
+| `kind` | `member-added`, `member-removed`, `card`, `message`, `stage`, `claim`, `release` or `import` |
 | `card` | The id of the card the entry is about. `null` for `member-added`, `member-removed` and `import` |
 | `actor` | Who did it, under the name the room's members see: the organisation id in a pair room, the handle in a shared room. Or `*operator` for something the operator did, or `*import` (section 8). Never a key id, and never an organisation id in a shared room |
 | `time` | Unix seconds on the board's clock, or `0` where no time is recorded (see below) |
@@ -83,7 +85,9 @@ When entries are appended:
 |---|---|
 | The operator creates a room | One `member-added` for each member, by `*operator` |
 | The operator adds a member to a shared room | One `member-added`, by `*operator` |
-| The operator removes a member from a shared room | One `member-removed`, by `*operator`, then one `stage` entry by `*operator` for each open finding of that member, which the removal closes as `withdrawn` |
+| The operator removes a member from a shared room | One `member-removed`, by `*operator`, then one `stage` entry by `*operator` for each open finding of that member, which the removal closes as `withdrawn`, then one `release` entry by `*operator` for each live claim the member held on another member's card |
+| A member claims a card, or renews its claim | One `claim`, by the claiming member |
+| A member gives up its claim | One `release`, by that member |
 | A member posts a card | One `card`, by its reporter. It covers the card and its report message |
 | A member posts a reply, proof, correction or ack | One `message`, by its author |
 | A member moves a card to another stage | Two entries by the member: a `message` for the text of the move (its message kind is `stage`), then a `stage` with the stage and outcome it set |
@@ -91,6 +95,9 @@ When entries are appended:
 A stage move is two entries because a card's stage and the text that came with the move are two things the board
 shows separately, and because a board upgraded from an older state file knows the texts of past moves but not
 which stage each of them set (section 8).
+
+A claim that ends because its time has passed, or because its card was closed, gets no entry: nothing happens on
+the board at that moment, and the `stage` entry says that the card is closed.
 
 A write that is refused appends nothing. A write repeated with the same `Idempotency-Key` returns its first answer
 and appends nothing.
@@ -141,6 +148,8 @@ The payload record's header is `p2paecn-chain-1 payload <kind>`. Its fields, in 
 | `card` | `kind`, `severity`, `title`, `message`, `text` | The card's `kind` (`finding` or `notice`), its `severity` (empty for a notice), its `title`, the `id` of its report message, and the `text` of that message |
 | `message` | `id`, `kind`, `replaces`, `text` | The message's `id`, its `kind` (`reply`, `proof`, `correction`, `ack` or `stage`), the id it `replaces` (empty unless it is a correction), and its `text` |
 | `stage` | `stage`, `outcome` | The stage the card was set to, and the outcome (empty unless the stage is `closed`) |
+| `claim` | `until`, `note` | The time the claim runs to, as a number, and its note (empty when there is none) |
+| `release` | none | The record is the header line alone: `p2paecn-chain-1 payload release` and `LF` |
 | `import` | `entries` | How many entries stand before this one in the room, as a number |
 
 Titles and texts are the ones the board stores and returns: already trimmed at both ends by the board when they
@@ -253,16 +262,25 @@ This is what `node p2p.mjs verify [room]` does for each room. A client of your o
 6. **Stages.** The last `stage` entry of the card has the payload hash you compute from the card's `stage` and
    `outcome`. A card without a `stage` entry is in its first stage (`reported` for a finding, `posted` for a
    notice) and has no outcome.
-7. **Nothing left over.** Every `card`, `message` and `stage` entry belongs to a card the board shows you.
-8. **Members.** For each name the room list gives for the room (yours and the others'), the last membership entry
+7. **Claims.** If a card shows a claim, the last entry of that card whose kind is `claim` or `release` is a
+   `claim`, its `actor` is the claim's `by`, and its `payload` is the hash you compute from the claim's `until`
+   and `note`. A card that shows no claim needs no entry: see below.
+8. **Nothing left over.** Every `card`, `message`, `stage`, `claim` and `release` entry belongs to a card the
+   board shows you.
+9. **Members.** For each name the room list gives for the room (yours and the others'), the last membership entry
    whose payload hash is that of the name is a `member-added`.
-9. **Import.** There is at most one `import` entry, and its payload hash is that of the number of entries before
-   it.
-10. If everything held, **save the head** together with the time. If anything failed, keep the head you had: it
+10. **Import.** There is at most one `import` entry, and its payload hash is that of the number of entries before
+    it.
+11. If everything held, **save the head** together with the time. If anything failed, keep the head you had: it
     is the evidence. Tell a person. Do not act on the board because of it.
 
 Where your key does not receive a title or a text (class `fields`), skip the payload comparison of that entry and
-count it.
+count it. The same holds for the note of another organisation's claim.
+
+What the check cannot tell about claims: a claim that the board shows must be in the record, so one that was put
+on a card without its entry, or whose note or time was changed, is found. A claim that is missing from a card is
+not found. A claim ends silently when its time passes, and that time is inside the payload hash, so the record
+does not let you tell a claim that ended from a live one that was taken off.
 
 The client exits with code 5 when a room does not verify, prints which entry, card or message differs, and leaves
 the saved head as it was. `--json` gives the same per room: `ok`, `head`, the counts, the `saved` head and a list
@@ -299,8 +317,8 @@ The client prints `imported  entries 1 to N were built when the board was upgrad
 
 ## 9. Test vectors
 
-[vectors/chain-1.json](vectors/chain-1.json) holds two rooms, a pair room and a shared room that was built by an
-import, with every kind of entry. For each entry it gives the payload values, the payload record and the entry
+[vectors/chain-1.json](vectors/chain-1.json) holds three rooms, a pair room, a shared room that was built by an
+import, and a pair room with claims, with every kind of entry. For each entry it gives the payload values, the payload record and the entry
 record as text (each is valid UTF-8; hash its UTF-8 bytes), and the entry as the API returns it. The values include
 a title and texts with multi-byte characters, a four-byte character, line feeds, colons, a text that looks like a
 field line, empty values, and entry numbers of two digits.

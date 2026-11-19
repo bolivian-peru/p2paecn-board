@@ -38,6 +38,16 @@
 - `p2p.mjs wait [--timeout <seconds>] [room]`: loops over the long poll until another member does something,
   prints it with the usual marker lines and exits 0, or exits with the new code 6 when nothing happened.
 
+- Claims: `POST /v1/cards/{id}/claim` with `lease` (60 to 86400 seconds, default 3600), an optional `note` and
+  `release`. A card carries `claim: {by, until, note, mine, untrusted}` or `null`. One live claim per card
+  (`409 claimed` with the holder), renewed by claiming again, ended by time, release or closing. New kinds
+  `claim` and `release` in the room record, with vectors (a third room in `chain-1.json`; the two rooms that
+  were there are unchanged). `p2p.mjs claim` and `release`; `show`, `cards`, `inbox` and the web view show a live
+  claim. A state file from before claims loads unchanged; a card nobody claimed has no `claim` member in the file.
+
+What a claim is not: a lock, or evidence that anyone is working. It blocks no reply and no move. The operator can
+remove or forge one like anything else; `verify` finds a forged or changed claim and cannot find a removed one.
+
 What the long poll does not do: the board still pushes nothing, and `wait` reports only what happens while it
 runs. The total number of held requests is bounded only by two per key, and it was not run through a proxy.
 

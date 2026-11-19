@@ -97,6 +97,9 @@ This project talks to a private partner board with `node p2p.mjs` (profile in $P
   show a post the operator made in a member's name.
 - Only the organisation that reported a finding closes it as verified. In a shared room nobody moves another
   member's card; reply or post proof instead.
+- `node p2p.mjs claim <card> [--lease 30m] [--note <text>]` tells the others you are working on an open finding,
+  and `node p2p.mjs release <card>` takes that back. A line "claimed by ... until ..." on a card is such a signal
+  from a member. It is not a lock and not a promise: you may still reply. Claim only when a person asks.
 - Enroll and revoke only when a person asks. The enrollment code comes from a person, in a file or at the hidden
   prompt; never ask for it in chat and never put it on a command line.
 ```

@@ -451,6 +451,141 @@
         "seq": 11,
         "hash": "ad5b4510df348c6acad7d7686ddbe6d6f418bed5939887803f90e5f4b6f32382"
       }
+    },
+    {
+      "room": "b-y",
+      "kind": "pair",
+      "note": "A pair room with claims: a claim with a note, its renewal without one, a release, and a claim by the other side.",
+      "entries": [
+        {
+          "values": {
+            "name": "supplier-b"
+          },
+          "payloadRecord": "p2paecn-chain-1 payload member-added\nname:10:supplier-b\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:b-y\nseq:1:1\nkind:12:member-added\ncard:0:\nactor:9:*operator\ntime:1:0\npayload:64:5428daa0f2c37bac0d8f0e5ed30883f10b564ca728fe06f98bab5685072041e0\nprev:64:0000000000000000000000000000000000000000000000000000000000000000\n",
+          "entry": {
+            "seq": 1,
+            "kind": "member-added",
+            "card": null,
+            "actor": "*operator",
+            "time": 0,
+            "payload": "5428daa0f2c37bac0d8f0e5ed30883f10b564ca728fe06f98bab5685072041e0",
+            "prev": "0000000000000000000000000000000000000000000000000000000000000000",
+            "hash": "39412b45c4841f0209b8e5b26cc826e0a45d06ea1057cfb2a123e52eae139781"
+          }
+        },
+        {
+          "values": {
+            "name": "reseller-y"
+          },
+          "payloadRecord": "p2paecn-chain-1 payload member-added\nname:10:reseller-y\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:b-y\nseq:1:2\nkind:12:member-added\ncard:0:\nactor:9:*operator\ntime:1:0\npayload:64:b8fa7755be5a72bc257170733bbef2e8db43f1daa174e07e4afcce2276f8cbfa\nprev:64:39412b45c4841f0209b8e5b26cc826e0a45d06ea1057cfb2a123e52eae139781\n",
+          "entry": {
+            "seq": 2,
+            "kind": "member-added",
+            "card": null,
+            "actor": "*operator",
+            "time": 0,
+            "payload": "b8fa7755be5a72bc257170733bbef2e8db43f1daa174e07e4afcce2276f8cbfa",
+            "prev": "39412b45c4841f0209b8e5b26cc826e0a45d06ea1057cfb2a123e52eae139781",
+            "hash": "1c149d37468e616ffa5e9737d787aac3aa6921011ce9c362e354d6213e564e67"
+          }
+        },
+        {
+          "values": {
+            "kind": "finding",
+            "severity": "friction",
+            "title": "Retry after a timeout sends the order twice",
+            "message": "7d3a9f40-0000-4000-8000-000000000011",
+            "text": "Seen once in a test run."
+          },
+          "payloadRecord": "p2paecn-chain-1 payload card\nkind:7:finding\nseverity:8:friction\ntitle:43:Retry after a timeout sends the order twice\nmessage:36:7d3a9f40-0000-4000-8000-000000000011\ntext:24:Seen once in a test run.\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:b-y\nseq:1:3\nkind:4:card\ncard:36:0b6f2c1e-0000-4000-8000-000000000004\nactor:10:reseller-y\ntime:10:1794850000\npayload:64:9d6dc3cc60a07bea9795b84895478ee79455def8e6d43aa55124802b4bd2f379\nprev:64:1c149d37468e616ffa5e9737d787aac3aa6921011ce9c362e354d6213e564e67\n",
+          "entry": {
+            "seq": 3,
+            "kind": "card",
+            "card": "0b6f2c1e-0000-4000-8000-000000000004",
+            "actor": "reseller-y",
+            "time": 1794850000,
+            "payload": "9d6dc3cc60a07bea9795b84895478ee79455def8e6d43aa55124802b4bd2f379",
+            "prev": "1c149d37468e616ffa5e9737d787aac3aa6921011ce9c362e354d6213e564e67",
+            "hash": "f02676afceed27224b4ca5db8fbc1084ed6d972a3f1d6db67ef3e58badea5498"
+          }
+        },
+        {
+          "values": {
+            "until": 1794853610,
+            "note": "Prüfe ich bis heute Abend: 🔍"
+          },
+          "payloadRecord": "p2paecn-chain-1 payload claim\nuntil:10:1794853610\nnote:32:Prüfe ich bis heute Abend: 🔍\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:b-y\nseq:1:4\nkind:5:claim\ncard:36:0b6f2c1e-0000-4000-8000-000000000004\nactor:10:supplier-b\ntime:10:1794850010\npayload:64:99589473249183870c602e828becba637e3df0e303e21a319504c76001725087\nprev:64:f02676afceed27224b4ca5db8fbc1084ed6d972a3f1d6db67ef3e58badea5498\n",
+          "entry": {
+            "seq": 4,
+            "kind": "claim",
+            "card": "0b6f2c1e-0000-4000-8000-000000000004",
+            "actor": "supplier-b",
+            "time": 1794850010,
+            "payload": "99589473249183870c602e828becba637e3df0e303e21a319504c76001725087",
+            "prev": "f02676afceed27224b4ca5db8fbc1084ed6d972a3f1d6db67ef3e58badea5498",
+            "hash": "04649490de2c47f50d074a978a4187a6a26b2dd438eca8bf48557a21be204871"
+          }
+        },
+        {
+          "values": {
+            "until": 1794860200,
+            "note": null
+          },
+          "payloadRecord": "p2paecn-chain-1 payload claim\nuntil:10:1794860200\nnote:0:\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:b-y\nseq:1:5\nkind:5:claim\ncard:36:0b6f2c1e-0000-4000-8000-000000000004\nactor:10:supplier-b\ntime:10:1794853000\npayload:64:e9b95d395d9ea317578000b18b4be31b2ed91abab8f2a2fd7f3d60af9e11c1df\nprev:64:04649490de2c47f50d074a978a4187a6a26b2dd438eca8bf48557a21be204871\n",
+          "entry": {
+            "seq": 5,
+            "kind": "claim",
+            "card": "0b6f2c1e-0000-4000-8000-000000000004",
+            "actor": "supplier-b",
+            "time": 1794853000,
+            "payload": "e9b95d395d9ea317578000b18b4be31b2ed91abab8f2a2fd7f3d60af9e11c1df",
+            "prev": "04649490de2c47f50d074a978a4187a6a26b2dd438eca8bf48557a21be204871",
+            "hash": "311638bc3b4c793f58279bd2b14bd88e0ebc7b257ba1e9b890d7d6592a11d012"
+          }
+        },
+        {
+          "values": {},
+          "payloadRecord": "p2paecn-chain-1 payload release\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:b-y\nseq:1:6\nkind:7:release\ncard:36:0b6f2c1e-0000-4000-8000-000000000004\nactor:10:supplier-b\ntime:10:1794854000\npayload:64:9dee06674d431bd70a568cd2abc58ec7d9d3c7fea183cecb52af8ae7cb6c956b\nprev:64:311638bc3b4c793f58279bd2b14bd88e0ebc7b257ba1e9b890d7d6592a11d012\n",
+          "entry": {
+            "seq": 6,
+            "kind": "release",
+            "card": "0b6f2c1e-0000-4000-8000-000000000004",
+            "actor": "supplier-b",
+            "time": 1794854000,
+            "payload": "9dee06674d431bd70a568cd2abc58ec7d9d3c7fea183cecb52af8ae7cb6c956b",
+            "prev": "311638bc3b4c793f58279bd2b14bd88e0ebc7b257ba1e9b890d7d6592a11d012",
+            "hash": "5cc5530b0bcd49fe619b65b5a4bff011ae5f496155f10375dc8c805dbe0dbb98"
+          }
+        },
+        {
+          "values": {
+            "until": 1794854160,
+            "note": "note:0:\nuntil:1:5"
+          },
+          "payloadRecord": "p2paecn-chain-1 payload claim\nuntil:10:1794854160\nnote:17:note:0:\nuntil:1:5\n",
+          "entryRecord": "p2paecn-chain-1 entry\nroom:3:b-y\nseq:1:7\nkind:5:claim\ncard:36:0b6f2c1e-0000-4000-8000-000000000004\nactor:10:reseller-y\ntime:10:1794854100\npayload:64:7ae8b71caef2b3b58fa99009a5109fe453d1467cbcace3bc9bd324bcff85605d\nprev:64:5cc5530b0bcd49fe619b65b5a4bff011ae5f496155f10375dc8c805dbe0dbb98\n",
+          "entry": {
+            "seq": 7,
+            "kind": "claim",
+            "card": "0b6f2c1e-0000-4000-8000-000000000004",
+            "actor": "reseller-y",
+            "time": 1794854100,
+            "payload": "7ae8b71caef2b3b58fa99009a5109fe453d1467cbcace3bc9bd324bcff85605d",
+            "prev": "5cc5530b0bcd49fe619b65b5a4bff011ae5f496155f10375dc8c805dbe0dbb98",
+            "hash": "f02bfe25895b3a30af62c06d2680e2b5aa7e1093f3d3950f405a1c8e347ee4c6"
+          }
+        }
+      ],
+      "head": {
+        "seq": 7,
+        "hash": "f02bfe25895b3a30af62c06d2680e2b5aa7e1093f3d3950f405a1c8e347ee4c6"
+      }
     }
   ]
 }

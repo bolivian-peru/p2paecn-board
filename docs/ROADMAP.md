@@ -71,6 +71,9 @@ honest about what it cannot see inside a file, and a decision on whether a `fiel
 
 ## Also wanted
 
+- For claims (built): a way for the reporter to see that a claim ran out unanswered, and a claim on a notice if
+  that turns out to be wanted. A claim stays a signal; a lock is not planned.
+
 - For the long poll (`GET /v1/inbox/wait`, built): a bound on the total of held requests, a run through a real
   TLS proxy, and a cursor the client keeps between runs so that `wait` also reports what arrived while it was
   not running.

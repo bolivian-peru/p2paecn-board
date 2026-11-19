@@ -18,8 +18,11 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Mutex;
 
-/// More windows than this are not kept. Past it, a caller with no window of its own yet shares one per kind of
-/// limit, so that a flood of made-up source addresses or names cannot grow the table without bound.
+/// More windows for source addresses than this are not kept. Past it, an address with no window of its own yet
+/// shares one, so that a flood of made-up source addresses cannot grow the table without bound. Only this kind is
+/// bounded this way, because only this kind is fed by callers nobody has checked: a key has a window only after
+/// its signature verified, and a room only when a member wrote into it. A flood of addresses therefore never
+/// pushes a key or a room into a shared window.
 pub const MAX_WINDOWS: usize = 20_000;
 
 /// Each limit is a count per window; 0 means no limit.
@@ -113,6 +116,8 @@ struct Window {
 #[derive(Default)]
 struct Windows {
     map: HashMap<(Kind, String), Window>,
+    /// How many of them are for source addresses.
+    unsigned: usize,
     purged: u64,
 }
 
@@ -151,11 +156,19 @@ impl Limiter {
         let length = self.config.window;
         if windows.purged != now {
             windows.map.retain(|_, w| w.start + length > now);
+            windows.unsigned = windows.map.keys().filter(|(kind, _)| *kind == Kind::Unsigned).count();
             windows.purged = now;
         }
-        // The shared window of a full table has the empty name, which no key, room or address has.
-        let name = if windows.map.len() >= MAX_WINDOWS && !windows.map.contains_key(&(kind, name.to_owned())) { "" } else { name };
-        windows.map.entry((kind, name.to_owned())).or_insert(Window { start: now, count: 0 })
+        // The shared window of the source addresses has the empty name, which no address has.
+        let full = kind == Kind::Unsigned && windows.unsigned >= MAX_WINDOWS;
+        let name = if full && !windows.map.contains_key(&(kind, name.to_owned())) { "" } else { name };
+        let Windows { map, unsigned, .. } = windows;
+        map.entry((kind, name.to_owned())).or_insert_with(|| {
+            if kind == Kind::Unsigned {
+                *unsigned += 1;
+            }
+            Window { start: now, count: 0 }
+        })
     }
 
     /// Counts one unit in each of `buckets`, or in none: `Err` is the seconds to wait when one of them is full.
@@ -295,6 +308,21 @@ mod tests {
         assert_eq!(l.window_count(), MAX_WINDOWS + 1, "every source past the bound shares one window");
         assert!(l.unsigned_over("a-source-never-seen", 1), "which is full");
         assert!(!l.unsigned_over("source-1", 1), "a source with its own window keeps it");
+        // The bound is on source addresses alone: with that table full, a key and a room still get windows of
+        // their own, with their own limits.
+        let l = limiter(Config { unsigned: 2, key_requests: 2, key_writes: 1, room_writes: 1, ..Config::off() });
+        for n in 0..(MAX_WINDOWS + 10) {
+            l.unsigned_failed(&format!("source-{n}"), 1);
+        }
+        for key in ["supplier-a/agent", "reseller-x/agent"] {
+            assert_eq!((l.key_request(key, 1), l.key_request(key, 1), l.key_request(key, 1)), (Ok(()), Ok(()), Err(60)), "{key}");
+        }
+        assert_eq!((l.write("supplier-a/agent", Some("a-x"), 1), l.write("reseller-x/agent", Some("hub"), 1)), (Ok(()), Ok(())));
+        assert_eq!(l.window_count(), MAX_WINDOWS + 1 + 6);
+        let l = limiter(Config { unsigned: 2, ..Config::off() });
+        for n in 0..(MAX_WINDOWS + 500) {
+            l.unsigned_failed(&format!("source-{n}"), 1);
+        }
         assert!(!l.unsigned_over("source-1", 61));
         assert_eq!(l.window_count(), 1, "the old windows are gone");
     }

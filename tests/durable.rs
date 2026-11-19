@@ -726,3 +726,33 @@ fn a_state_file_whose_records_do_not_link_stops_startup() {
     let s = start(&dir, &[]);
     assert!(s.started.contains("loaded from state file"), "{}", s.started);
 }
+
+/// A version 2 state file as the board wrote it before cards could be claimed.
+const STATE_BEFORE_CLAIMS: &[u8] = include_bytes!("fixtures/board-state-v2.json");
+
+#[test]
+fn a_state_file_from_before_claims_loads_and_a_claim_survives_a_restart() {
+    let dir = scratch("claims");
+    put_state(&dir, STATE_BEFORE_CLAIMS);
+    let (supplier, reseller) = (agent("supplier-a/agent", 41), agent("reseller-x/agent", 42));
+    let s = start(&dir, &[]);
+    assert!(s.started.contains("loaded from state file") && !s.started.contains("version 1"), "{}", s.started);
+    let cards = json_of(&s.get(&reseller, "/v1/rooms/a-x/cards").1);
+    let card = cards["cards"][0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(cards["cards"][0]["claim"], Value::Null);
+    let before = record(&s, &reseller, "a-x").1;
+
+    let (status, claimed) = s.post(&supplier, &format!("/v1/cards/{card}/claim"), json!({ "lease": 7200, "note": "Tracing it." }));
+    assert_eq!(status, 200, "{claimed}");
+    let shown = json_of(&s.get(&reseller, &format!("/v1/cards/{card}")).1)["card"]["claim"].clone();
+    assert_eq!((shown["by"].clone(), shown["note"].clone(), shown["mine"].clone()), (json!("supplier-a"), json!("Tracing it."), json!(false)));
+    let (bytes, after) = record(&s, &reseller, "a-x");
+    assert_eq!(after["head"]["seq"], json!(before["head"]["seq"].as_u64().unwrap() + 1));
+    assert_eq!(after["entries"].as_array().unwrap().last().unwrap()["kind"], json!("claim"));
+    drop(s);
+
+    let s = start(&dir, &[]);
+    assert_eq!(json_of(&s.get(&reseller, &format!("/v1/cards/{card}")).1)["card"]["claim"], shown);
+    assert_eq!(record(&s, &reseller, "a-x").0, bytes);
+    assert_eq!(common::record_differs("a-x", &after["entries"], &details(&s, &reseller, "a-x")), Vec::<String>::new());
+}

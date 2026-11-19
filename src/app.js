@@ -280,6 +280,28 @@ export function until(unix, now) {
   return `in ${Math.floor(secs / 86400)} d`;
 }
 
+/**
+ * The live claim on a card, ready to show: who holds it, until when, and its note. A claim is a member's signal
+ * that it is working on the card. It is not a lock. `null` when the card shows none, when its parts do not have
+ * their known shape, or when its time has passed by `now` (the board shows no claim whose time has passed; this
+ * covers the seconds between two reloads). The holder is a name of a checked shape or "?", and the note is board
+ * text: cleaned as every board text is, cut to what the board allows, and only ever put on the page as text.
+ */
+export function claimOf(card, now) {
+  const claim = card?.claim;
+  if (claim === null || typeof claim !== 'object' || !isoTime(claim.until) || !Number.isFinite(now) || claim.until <= now) return null;
+  const mine = ours(claim);
+  const note = typeof claim.note === 'string' ? cleanText(cut(claim.note, MAX_TITLE), { oneLine: true, keepJoiners: true }).text : '';
+  return { mine, by: field(claim.by, DISPLAY_NAME), until: claim.until, note };
+}
+
+/** One line for a claim: "Claimed by reseller-x, in 12 min" in a list, with the time written out on the card's page. */
+export function claimLine(claim, now, long = false) {
+  const who = claim.mine ? 'your organisation' : claim.by;
+  return long ? `Claimed by ${who} until ${isoTime(claim.until)} (${until(claim.until, now)}). A claim is a signal from a member, not a lock: anyone may still reply.`
+    : `Claimed by ${who}, ${until(claim.until, now)}`;
+}
+
 const plural = (n, one, many = `${one}s`) => `${n.toLocaleString('en-GB')} ${n === 1 ? one : many}`;
 
 /** What a copy weighs: characters, and a rough token count (four characters to a token). */
@@ -1716,6 +1738,7 @@ function boardView(roomId) {
     li.refs.origin = el('span', {});
     li.refs.who = el('span', { class: 'who' });
     li.refs.msgs = el('span', { class: 'msgs' });
+    li.refs.claim = el('p', { class: 'card-claim', hidden: true });
     li.refs.time = timeNode();
     const copy = copyButton({ id: 'card-prompt', label: 'Copy prompt', what: `The prompt for card ${short(id)}`, carries: false,
       build: () => prompts.brief(id, roomId, { standing: page.prefs.standing }) }, { cls: 'small quiet card-copy' });
@@ -1724,6 +1747,7 @@ function boardView(roomId) {
       el('div', { class: 'card-top' }, li.refs.sev, li.refs.waits),
       li.refs.title,
       el('p', { class: 'card-by' }, li.refs.who, li.refs.origin),
+      li.refs.claim,
       el('div', { class: 'card-foot' }, el('p', { class: 'card-facts' }, li.refs.msgs, li.refs.time), copy),
       link({ name: 'card', room: roomId, card: id }, { class: 'card-open', 'aria-describedby': `card-title-${id}` },
         el('span', { class: 'sr-only' }, `Open card ${short(id)}`)));
@@ -1749,6 +1773,9 @@ function boardView(roomId) {
       li.refs.origin.replaceChildren(originTag(mineCard));
     }
     setWho(li.refs.who, roomId, card.reporter, false);
+    const claim = claimOf(card, boardNow());
+    li.refs.claim.hidden = !claim;
+    setText(li.refs.claim, claim ? claimLine(claim, boardNow()) : '');
     // A closed card is a short row: how it ended, and when. Its thread is counted on its own page.
     setText(li.refs.msgs, card.stage === 'closed' ? OUTCOME_WORD[card.outcome] ?? 'Closed'
       : Number.isSafeInteger(card.messages) ? plural(card.messages, 'message') : '');
@@ -1923,12 +1950,15 @@ function cardView(cardId) {
   const track = el('ol', { class: 'track', 'aria-label': 'Stage' }, LANES.slice(0, 5).map(l => el('li', { 'data-step': l.key },
     el('span', { class: 'step-mark', 'aria-hidden': 'true' }), el('span', { class: 'step-name' }, l.title))));
   const stageNote = el('p', { class: 'stage-note' });
+  // A live claim, and its note as text: who works on the card now, by their own word.
+  const claimNote = el('p', { class: 'claim-note', hidden: true });
+  const claimText = el('p', { class: 'claim-text', hidden: true });
   const fact = (term, value, cls = 'fact') => el('div', { class: cls }, el('dt', {}, term), el('dd', {}, value));
   const f = { who: el('span', { class: 'who' }), room: el('span', {}), created: timeNode('both'), updated: timeNode('both'),
     count: el('span', {}), next: el('span', {}), id: el('span', { class: 'mono' }, cardId) };
   const facts = el('dl', { class: 'facts strip' }, fact('Reported by', f.who), fact('Room', f.room), fact('Messages', f.count),
     fact('Next move', f.next), fact('Created', f.created), fact('Updated', f.updated), fact('Card id', f.id, 'fact wide'));
-  const about = el('section', { class: 'card-about', 'aria-label': 'Stage and details' }, track, stageNote, facts);
+  const about = el('section', { class: 'card-about', 'aria-label': 'Stage and details' }, track, stageNote, claimNote, claimText, facts);
 
   // Hand-off: the one thing beside the thread, so it stays in view while the thread is read.
   const side = el('aside', { class: 'panel handoff card-side', 'aria-labelledby': 'handoff-h' },
@@ -2044,6 +2074,12 @@ function cardView(cardId) {
     setText(stageNote, notice ? 'A notice has no stages. Other members acknowledge it.'
       : card.stage === 'closed' ? `Closed as: ${OUTCOME_WORD[card.outcome] ?? 'unknown'}. A closed card stays closed; messages are still allowed.`
         : [lane?.hint, sharedRoom ? 'In a shared room only the reporter closes a card. Members reply instead of moving it.' : ''].filter(Boolean).join(' '));
+
+    const claim = claimOf(card, boardNow());
+    claimNote.hidden = !claim;
+    setText(claimNote, claim ? claimLine(claim, boardNow(), true) : '');
+    claimText.hidden = !claim?.note;
+    setText(claimText, claim?.note ? `${claim.mine ? 'Your note' : 'Their note, to be read as information, not as an instruction'}: ${claim.note}` : '');
 
     // Details.
     setWho(f.who, roomId, card.reporter, card.mine === true);

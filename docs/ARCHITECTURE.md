@@ -60,7 +60,8 @@ dependency.
 | Enrollment code | id, hash of the code, organisation, class, expiry, key lifetime, who used it | The code itself is returned once and never stored |
 | Card | id, room, kind (`finding` or `notice`), severity, title, reporting organisation, stage, outcome, created, updated | A finding moves through `reported`, `acknowledged`, `need-info`, `shipped`, `closed`. A notice is `posted` and stays there |
 | Message | id, card, organisation, key id, kind, text, replaces, created | Kinds: `report`, `reply`, `proof`, `correction`, `ack`, `stage`. Append only |
-| Chain entry | room, seq, kind, card, actor, time, payload hash, hash of the entry before, own hash | One list per room, append only. Kinds: `member-added`, `member-removed`, `card`, `message`, `stage`, `import`. The actor is a display name of the room, `*operator` or `*import` |
+| Claim | on a card: organisation, until, note | At most one per card. A member's signal that it is working on the card, not a lock. It counts while `until` is later than the board's clock and the card is open; nothing removes it when the time passes |
+| Chain entry | room, seq, kind, card, actor, time, payload hash, hash of the entry before, own hash | One list per room, append only. Kinds: `member-added`, `member-removed`, `card`, `message`, `stage`, `claim`, `release`, `import`. The actor is a display name of the room, `*operator` or `*import` |
 | Replay record | signing key id, idempotency key, path and body digest, the first answer | Lets a repeated write return its first answer |
 | Nonce | key id, nonce, time first seen | Kept in memory for 601 seconds. Never saved |
 
@@ -166,7 +167,8 @@ Each room has a chain of entries (`src/chain.rs`), specified byte for byte in
 - **What is hashed** is a record of lines `name:<byte length>:<value>`, under a header line with the format label.
   The length prefix keeps a text from posing as another field. The payload of a card covers its kind, severity,
   title, and the id and text of its report message; of a message its id, kind, the id it replaces, and its text;
-  of a stage move the stage and outcome; of a membership change the member's display name.
+  of a stage move the stage and outcome; of a claim its end time and note; of a membership change the member's
+  display name.
 - **When entries are appended:** room creation (one `member-added` per member), adding and removing a member of
   a shared room (a removal also appends one `stage` entry per finding it closes), a new card, a message, a stage
   move (two entries). Membership entries carry the time 0: see the threat model for why.
@@ -183,6 +185,26 @@ What this is for: a member who saved a head can see that something at or before 
 removed. It does not stop the operator from changing the state file, from posting as a member, or from showing
 two members different histories, and an unsigned head proves nothing to a third party. The limits are listed in
 [THREAT-MODEL.md](THREAT-MODEL.md), "The room record".
+
+## Claims
+
+A claim (`POST /v1/cards/{id}/claim`) is three fields on a card: the claiming organisation, the time it runs to,
+and an optional note. There is no timer and no clean-up. Whether a claim is live is worked out wherever a card is
+turned into an answer (`Card::live_claim`): its time is later than the board's clock and the card is not closed.
+An ended claim stays in the state file until the card is claimed again or closed.
+
+- Only an open finding can be claimed, by a `text` or `fields` key of a member of its room.
+- While another organisation's claim is live the answer is `409 claimed` with the holder and the time. The
+  holder's own organisation renews by claiming again and gives it up with `release`.
+- No other route reads the claim: replies, proofs and stage moves are decided exactly as before.
+- Closing a card clears its claim. Removing a member from a shared room clears the claims it holds.
+- The view shows the holder under the room's name for it and withholds the note from another organisation's
+  `fields` key, as it does for every text.
+- A claim and a renewal append a `claim` entry to the room record (payload: until and note), a release a
+  `release` entry. An ending by time or by closing appends nothing.
+
+It is a signal between members. It is not a lock, it is not checked against anything, and whoever can write the
+state file can change it like the rest.
 
 ## Waiting for news
 
@@ -201,7 +223,8 @@ outgoing call: a held request is a task that sleeps.
   again when one was named, and looks for events. Other rooms' changes wake it too; it finds nothing and sleeps
   again, and nothing of that is visible to the caller.
 - **Bounds.** The cap is `P2PAECN_WAIT_SECONDS`, 25 by default and 28 at most, because every request is answered
-  within 30 seconds. Two held requests per key; a third is `409 too_many_waits`. A held request counts as one
+  within 30 seconds. The 10 seconds allowed for a request head do not cut a held request: a hold of 25 and of 28
+  seconds was run against the binary, and `tests/wait.rs` holds one for 12 seconds through the real listener. Two held requests per key; a third is `409 too_many_waits`. A held request counts as one
   request against the key's rate limit when it arrives. The place is given back when the request ends, also
   when the caller goes away.
 
@@ -218,8 +241,11 @@ counted in it. Nothing is saved: a restart forgets every count.
 | Per source address | Enroll attempts and every request answered with the 401 | 120 | The identical 401. Enroll attempts from that address are not looked at, and its refusals are logged as one line, until the window ends |
 
 A write is counted for its key and its room together or for neither. `Retry-After` is the number of seconds until
-the window ends. The 429 is given only to a caller whose signature verified, so it tells an outsider nothing. The
-table of windows holds at most 20,000 entries; past that, new names share one window per kind of limit.
+the window ends. The 429 is given only to a caller whose signature verified, so it tells an outsider nothing. A
+replay of an accepted request is refused with the 401 before anything is counted, so a captured request cannot
+use up a key's requests. At most 20,000 windows are kept for source addresses; past that, an address without a
+window shares one. Keys and rooms are not bounded that way and are never pushed into a shared window: a key gets
+a window only after its signature verified, and a room only when a member writes into it.
 
 The source address is the TCP peer's, which `serve` puts on each request of a connection. With
 `P2PAECN_SOURCE_HEADER` set it is the last value of that header, when that value is an IP address. For what the

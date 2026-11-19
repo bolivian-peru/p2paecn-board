@@ -91,6 +91,29 @@ async fn a_key_over_its_request_limit_gets_429_and_the_same_request_passes_later
     let stranger = agent("reseller-x/agent", 99);
     assert_eq!(raw(&w.app, signed(&stranger, "GET", "/v1/inbox", "", None)).await, unauthorized);
 
+    // A request that was accepted, sent again: a replay is the 401 and is not counted, so whoever captured a
+    // request cannot use up the key's requests with it, and learns nothing from a 429.
+    let accepted = signed(&b.supplier, "GET", "/v1/rooms", "", None);
+    let replays: Vec<_> = (0..20).map(|_| copy(&accepted, "")).collect();
+    assert_eq!(raw(&w.app, accepted).await.status, StatusCode::OK); // the supplier's second request of five
+    for replay in replays {
+        assert_eq!(raw(&w.app, replay).await, unauthorized);
+    }
+    for _ in 0..3 {
+        assert_eq!(w.get(&b.supplier, "/v1/inbox").await.0, StatusCode::OK, "twenty replays used up nothing");
+    }
+    let last = signed(&b.supplier, "GET", "/v1/inbox", "", None);
+    assert_limited(&raw(&w.app, last).await, 2);
+    // And a replay of an accepted request stays the 401 while the key is over its limit.
+    let seen = signed(&b.second, "GET", "/v1/rooms", "", None);
+    let seen_again = copy(&seen, "");
+    assert_eq!(raw(&w.app, seen).await.status, StatusCode::OK);
+    for _ in 0..3 {
+        w.get(&b.second, "/v1/inbox").await;
+    }
+    assert_limited(&raw(&w.app, signed(&b.second, "GET", "/v1/inbox", "", None)).await, 2);
+    assert_eq!(raw(&w.app, seen_again).await, unauthorized);
+
     // The refused request did not use up its nonce: the very same bytes pass once the window has ended, and only
     // then is the nonce taken.
     until_the_window_ends().await;

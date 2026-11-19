@@ -80,7 +80,7 @@ async fn populate(b: &Board) -> (String, String, String) {
 
 /// The write routes the board has: method, path pattern as written in `src/api.rs`. The test below checks that
 /// this list is every `POST` route in the router apart from enrollment.
-const WRITE_ROUTES: [&str; 4] = ["/v1/rooms/{room}/cards", "/v1/cards/{id}/messages", "/v1/cards/{id}/stage", "/v1/keys/revoke"];
+const WRITE_ROUTES: [&str; 5] = ["/v1/rooms/{room}/cards", "/v1/cards/{id}/messages", "/v1/cards/{id}/stage", "/v1/cards/{id}/claim", "/v1/keys/revoke"];
 
 /// Every `.route(` line of the public router that has a `.post(`, read from the source, so a write route added
 /// later fails this test until it is added to `WRITE_ROUTES`.
@@ -197,6 +197,10 @@ async fn every_write_by_a_viewer_is_403_read_only_key_and_changes_nothing() {
         ("/v1/cards/{id}/stage", format!("/v1/cards/{pair}/stage"), stage_body.clone()),
         ("/v1/cards/{id}/stage", format!("/v1/cards/{foreign}/stage"), stage_body.clone()),
         ("/v1/cards/{id}/stage", format!("/v1/cards/{unseen}/stage"), stage_body.clone()),
+        ("/v1/cards/{id}/claim", format!("/v1/cards/{pair}/claim"), json!({ "lease": 600, "note": "A viewer cannot claim." })),
+        ("/v1/cards/{id}/claim", format!("/v1/cards/{pair}/claim"), json!({ "release": true })),
+        ("/v1/cards/{id}/claim", format!("/v1/cards/{foreign}/claim"), json!({})),
+        ("/v1/cards/{id}/claim", format!("/v1/cards/{unseen}/claim"), json!({})),
         ("/v1/keys/revoke", "/v1/keys/revoke".into(), revoke_body("reseller-x/office-web")),
         ("/v1/keys/revoke", "/v1/keys/revoke".into(), revoke_body("reseller-x/agent")),
         ("/v1/keys/revoke", "/v1/keys/revoke".into(), revoke_body("supplier-a/agent")),

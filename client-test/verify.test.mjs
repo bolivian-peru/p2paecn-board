@@ -197,7 +197,8 @@ test('the vectors are what the generator makes now, in both copies, and the clie
     }
     assert.deepEqual(room.head, { seq: room.entries.length, hash: prev });
   }
-  assert.equal(entries, 23);
+  assert.equal(entries, 30);
+  assert.equal(chainPayload('release', {}).toString('utf8'), 'p2paecn-chain-1 payload release\n');
   // A length is a number of bytes: two for U+00FC, four for U+1F600.
   assert.equal(chainPayload('member-added', { name: 'ü\u{1F600}' }).toString('utf8'), 'p2paecn-chain-1 payload member-added\nname:6:ü\u{1F600}\n');
 });
@@ -387,6 +388,62 @@ test('a head rolled back to an older state file: verify fails against the saved 
   const forked = await client('x', ['verify', PAIR]);
   assert.equal(forked.code, 5, forked.all);
   assert.match(forked.stdout, /differs {3}entry 11 is not the entry that was the head when it was last checked \(\S+\): the record was rewritten/);
+});
+
+test('claims are in the record: a live claim verifies, and one changed or made up in the state file does not', async () => {
+  // The test before left a saved head that the board no longer holds, on purpose. This one starts afresh.
+  await restartWith(() => good);
+  rmSync(join(home('x'), 'chain-heads.json'));
+  await ok('x', ['verify']);
+  // An open finding in the pair room, claimed by the other side with a note.
+  const open = posted(await ok('x', ['post', PAIR, '--kind', 'finding', '--severity', 'friction', '--title', 'Retry after a timeout sends the order twice', '--text-file', file('twice.txt', 'Seen once in a test run.')]));
+  await ok('a', ['claim', open, '--lease', '2h', '--note', 'Tracing it.']);
+  const verified = await ok('x', ['verify', PAIR]);
+  assert.match(verified.stdout, /compared {2}3 cards, 7 messages and 2 members with 12 entries/);
+  const withClaim = readFileSync(statePath(), 'utf8');
+
+  // The note changed, the time moved, the claim given to the other side, a claim made up on another card: each
+  // is a claim the board shows that the record does not hold.
+  const changes = [
+    s => (s.cards.find(c => c.id === open).claim.note = 'Will not look at it.'),
+    s => (s.cards.find(c => c.id === open).claim.until += 86400),
+    s => (s.cards.find(c => c.id === open).claim.org = 'reseller-x'),
+  ];
+  for (const change of changes) {
+    await restartWith(() => {
+      const s = JSON.parse(withClaim);
+      change(s);
+      return s;
+    });
+    const r = await client('x', ['verify', PAIR]);
+    assert.equal(r.code, 5, r.all);
+    assert.match(r.stdout, new RegExp(`differs {3}card ${open}: the claim the board shows \\(by (supplier-a|reseller-x) until \\S+Z\\) is not the last claim the record holds for it`));
+    assert.equal(r.stdout.match(/differs/g).length, 1);
+    assert.match(r.stderr, CHANGED);
+  }
+  // What the record cannot show, as CHAIN.md says: a live claim taken off the card in the state file. The
+  // board then shows none, as it would for a claim whose time has passed, and the check passes.
+  await restartWith(() => {
+    const s = JSON.parse(withClaim);
+    delete s.cards.find(c => c.id === open).claim;
+    return s;
+  });
+  assert.match((await ok('x', ['verify', PAIR])).stdout, /^room a-x: verified$/m);
+
+  // Released by its holder and claimed by us: the last claim entry is ours, and it verifies for both sides.
+  await restartWith(() => withClaim);
+  await ok('a', ['release', open]);
+  await ok('x', ['claim', open]);
+  assert.match((await ok('x', ['verify', PAIR])).stdout, /with 14 entries/);
+  assert.match((await ok('a', ['verify', PAIR])).stdout, /^room a-x: verified$/m);
+
+  // A fields key cannot compare the note of another organisation's claim, and says so: one more withheld.
+  await ok('a', ['claim', cards.shared, '--note', 'Ours to answer.']);
+  const fields = await ok('y', ['verify', SHARED]);
+  assert.match(fields.stdout, /with 7 entries/);
+  assert.match(fields.stdout, /withheld {2}4 cards or messages were compared without their title or text: this key is class fields/);
+  assert.ok(!fields.all.includes('Ours to answer'));
+  assert.match((await ok('x', ['verify', SHARED])).stdout, /^room hub: verified$/m);
 });
 
 test('a saved-heads file that others can read or that is damaged is refused, not replaced', async () => {

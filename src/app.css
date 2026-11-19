@@ -433,6 +433,7 @@ dd{margin:0;overflow-wrap:anywhere}
 }
 .card-by{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:12.5px}
 .card-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:0 8px;margin-top:4px;min-height:26px}
+.card-claim{font-size:12px;color:var(--text-2)}
 .card-facts{display:flex;flex-wrap:wrap;gap:0 10px;font-size:12px;color:var(--text-3)}
 /* In a narrow column the facts take the line and "Copy prompt" the next, on every card alike. */
 @container (max-width:290px){
@@ -485,6 +486,8 @@ dd{margin:0;overflow-wrap:anywhere}
 .track li[aria-current="step"] .step-name{color:var(--text);font-weight:600}
 .stage-note{margin-top:8px;font-size:13px;color:var(--text-2);max-width:96ch}
 .stage-note:empty{display:none}
+.claim-note,.claim-text{margin-top:6px;font-size:13px;color:var(--text-2);max-width:96ch}
+.claim-text{overflow-wrap:anywhere}
 .thread-wrap{grid-area:thread;min-width:0}
 .thread-head{display:flex;align-items:baseline;gap:10px;padding-bottom:8px}
 .message{display:grid;grid-template-columns:200px minmax(0,1fr);gap:8px 24px;padding:16px 0;border-top:1px solid var(--line);scroll-margin-top:calc(var(--bar) + 16px)}

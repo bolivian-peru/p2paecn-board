@@ -254,10 +254,28 @@ function cardLines(card) {
   const stage = card.outcome ? `${field(card.stage, STAGES)}:${field(card.outcome, OUTCOMES)}` : field(card.stage, STAGES);
   const by = ours(card) ? 'by us' : `by ${field(card.reporter, DISPLAY_NAME)}`;
   const head = `${field(card.id, UUID)}  ${field(card.room, ROOM_ID)}  ${kind}  ${stage}  ${by}  updated ${when(card.updated)}`;
-  if (card.title === null || card.title === undefined) return [`${head}  (title withheld: this key is class fields)`];
-  const title = clean(cut(card.title, MAX_TITLE), true);
-  if (ours(card)) return [`${head}  ${title}`];
-  return [head, fenced(title)];
+  const lines = [];
+  if (card.title === null || card.title === undefined) {
+    lines.push(`${head}  (title withheld: this key is class fields)`);
+  } else {
+    const title = clean(cut(card.title, MAX_TITLE), true);
+    if (ours(card)) lines.push(`${head}  ${title}`);
+    else lines.push(head, fenced(title));
+  }
+  return [...lines, ...claimLines(card.claim)];
+}
+
+/**
+ * The line of a live claim on a card, and its note: fenced unless our own organisation wrote it. A claim is a
+ * signal from a member that it is working on the card. It is not a lock, and the board shows it only while its
+ * time has not passed.
+ */
+function claimLines(claim) {
+  if (!isObject(claim)) return [];
+  const line = `  claimed by ${ours(claim) ? 'us' : field(claim.by, DISPLAY_NAME)} until ${when(claim.until)}`;
+  if (typeof claim.note !== 'string') return [line];
+  const note = clean(cut(claim.note, MAX_TITLE), true);
+  return ours(claim) ? [`${line}  note: ${note}`] : [`${line}  note:`, fenced(note)];
 }
 
 // ---------------------------------------------------------------- profile and files
@@ -486,7 +504,9 @@ function accept(ctx, res, wellFormed = () => true) {
   if (ctx.json && res.json) printJson(res.json);
   if (code === 4) throw new Exit(4, 'unauthorized: the board did not accept this key or signature. Run: node p2p.mjs doctor');
   const error = typeof res.json?.error === 'string' && /^[a-z0-9_]{1,80}$/.test(res.json.error) ? res.json.error : 'no error code';
-  if (code === 2) throw new Exit(2, `refused by the board: ${error} (HTTP ${res.status})`);
+  // `409 claimed` says who holds the card and until when.
+  const holder = error === 'claimed' && isObject(res.json.claim) ? `: held by ${field(res.json.claim.by, DISPLAY_NAME)} until ${when(res.json.claim.until)}` : '';
+  if (code === 2) throw new Exit(2, `refused by the board: ${error} (HTTP ${res.status})${holder}`);
   if (res.status === 429) throw new Exit(3, 'uncertain: the board\'s rate limit is still reached, so this was not done. Re-run the same command later.');
   const redirect = res.status >= 300 && res.status < 400 ? ', a redirect, which is never followed: check the board URL' : '';
   throw new Exit(3, `uncertain: the board answered HTTP ${res.status}${redirect}. Re-run the same command.`);
@@ -499,8 +519,9 @@ async function read(ctx, path, wellFormed) {
 /**
  * A write under the pending-file rule. Before sending, the idempotency key and a hash of the request are saved in
  * pending/<hash>.json; the same command finds the same file and reuses the key, also when two runs start at once.
- * The file is removed when the board gives a definite answer (a well-formed 2xx, or a 4xx other than 401) and kept
- * on no answer, a 5xx, a 401 or a 2xx without the expected JSON.
+ * The file is removed when the board gives a definite answer (a well-formed 2xx, or a 4xx other than 401 and 429)
+ * and kept on no answer, a 5xx, a 401, a 429 (the rate limit: the write was not done) or a 2xx without the expected
+ * JSON.
  */
 async function write(ctx, path, body, wellFormed) {
   const { profile, home } = ctx;
@@ -558,6 +579,8 @@ const CHAIN_PAYLOADS = {
   card: ['kind', 'severity', 'title', 'message', 'text'],
   message: ['id', 'kind', 'replaces', 'text'],
   stage: ['stage', 'outcome'],
+  claim: ['until', 'note'],
+  release: [],
   import: ['entries'],
 };
 
@@ -650,10 +673,11 @@ function checkSaved(saved, entries) {
  * key can see must have its entry, with the same author, time and payload hash, and the record must hold no card,
  * message or stage entry for something the board no longer shows. Returns the problems and what was counted.
  */
-function checkContent(entries, members, cards) {
+function checkContent(entries, members, cards, keyClass) {
   const problems = [];
   const count = { cards: cards.length, messages: 0, withheld: 0, imported: 0, unknown: 0 };
-  const byCard = new Map(); // card id -> { card: [entries], message: [entries], stage: [entries] }
+  const byCard = new Map(); // card id -> { card: [entries], message: [entries], stage: [entries], claim: [claim and release entries] }
+  const none = () => ({ card: [], message: [], stage: [], claim: [] });
   // The payload hash of a name's `member-added` and of its `member-removed` differ, so each name is looked up
   // under both: payload hash -> name, and name -> kind of the last membership entry about it.
   const named = new Map(members.flatMap(name => ['member-added', 'member-removed'].map(kind => [`${kind} ${payloadHash(kind, { name })}`, name])));
@@ -666,9 +690,9 @@ function checkContent(entries, members, cards) {
       if (count.imported) problems.push(`entry ${e.seq} is a second import entry: a record has at most one`);
       else if (e.payload !== payloadHash('import', { entries: e.seq - 1 })) problems.push(`entry ${e.seq}, the import entry, does not count the entries before it`);
       count.imported = e.seq;
-    } else if (['card', 'message', 'stage'].includes(e.kind) && e.card !== null) {
-      if (!byCard.has(e.card)) byCard.set(e.card, { card: [], message: [], stage: [] });
-      byCard.get(e.card)[e.kind].push(e);
+    } else if (['card', 'message', 'stage', 'claim', 'release'].includes(e.kind) && e.card !== null) {
+      if (!byCard.has(e.card)) byCard.set(e.card, none());
+      byCard.get(e.card)[e.kind === 'release' ? 'claim' : e.kind].push(e);
     } else {
       count.unknown++;
     }
@@ -682,7 +706,7 @@ function checkContent(entries, members, cards) {
   const seen = new Set();
   for (const { card, messages } of cards) {
     const id = card.id;
-    const of = byCard.get(id) || { card: [], message: [], stage: [] };
+    const of = byCard.get(id) || none();
     seen.add(id);
     const report = messages[0]?.kind === 'report' ? messages[0] : null;
     const thread = report ? messages.slice(1) : messages;
@@ -714,9 +738,23 @@ function checkContent(entries, members, cards) {
     if (last ? last.payload !== payloadHash('stage', { stage: card.stage, outcome: card.outcome }) : card.stage !== first || (card.outcome ?? null) !== null) {
       problems.push(`card ${id}: its stage (${field(card.stage, STAGES)}${card.outcome ? `:${field(card.outcome, OUTCOMES)}` : ''}) is not the stage the record holds last for it`);
     }
+
+    // A claim the board shows must be the last claim entry of the card, not followed by a release. A card that
+    // shows none needs no entry: a claim ends without one when its time passes or its card is closed, and the
+    // time is inside the payload hash, so that an ended claim cannot be told from one the board hides.
+    if (isObject(card.claim)) {
+      const held = of.claim[of.claim.length - 1];
+      // A fields key gets no note written by another organisation, and cannot tell "no note" from "withheld".
+      const readable = keyClass !== 'fields' || ours(card.claim);
+      if (!readable) count.withheld++;
+      const same = held?.kind === 'claim' && held.actor === card.claim.by
+        && (!readable || held.payload === payloadHash('claim', { until: card.claim.until, note: card.claim.note }));
+      if (!same) problems.push(`card ${id}: the claim the board shows (by ${field(card.claim.by, DISPLAY_NAME)} until ${when(card.claim.until)}) is not the last claim the record holds for it`);
+    }
   }
   for (const [id, of] of byCard) {
-    if (!seen.has(id)) problems.push(`entry ${(of.card[0] || of.message[0] || of.stage[0]).seq} and ${of.card.length + of.message.length + of.stage.length - 1} more record a card (${id}) that the board does not show: it was removed`);
+    const all = [...of.card, ...of.message, ...of.stage, ...of.claim].sort((a, b) => a.seq - b.seq);
+    if (!seen.has(id)) problems.push(`entry ${all[0].seq} and ${all.length - 1} more record a card (${id}) that the board does not show: it was removed`);
   }
   return { problems, count };
 }
@@ -760,7 +798,7 @@ async function verifyRoom(ctx, room, members, saved) {
     // What the board shows is compared only with a chain that holds together.
     if (!problems.length) {
       problems = checkSaved(saved, entries);
-      const content = checkContent(entries, members, cards);
+      const content = checkContent(entries, members, cards, ctx.profile.class);
       problems.push(...content.problems);
       count = content.count;
     }
@@ -1063,6 +1101,36 @@ async function stage(ctx, flags, [id, move]) {
   for (const line of cardLines(card)) out(line);
 }
 
+/** A lease as seconds: a number of seconds, or a number with s, m, h or d. 60 seconds to one day. */
+function leaseSeconds(value) {
+  const m = /^(\d{1,6})([smhd]?)$/.exec(value);
+  const seconds = m ? Number(m[1]) * { '': 1, s: 1, m: 60, h: 3600, d: 86400 }[m[2]] : 0;
+  if (seconds < 60 || seconds > 86400) throw usage('--lease is a time from 60 seconds to one day, for example 90s, 30m, 2h, 1d or a number of seconds');
+  return seconds;
+}
+
+/**
+ * claim <card>: tells the other members that we are working on a card, for a stated time (an hour unless --lease
+ * says otherwise). Claiming again renews it. A claim is a signal, not a lock: everyone can still reply and move
+ * the card, and the board stops showing the claim when its time has passed.
+ */
+async function claim(ctx, flags, [id]) {
+  const path = `/v1/cards/${cardId(id, 'claim')}/claim`;
+  const body = {};
+  if (flags.lease !== undefined) body.lease = leaseSeconds(flags.lease);
+  if (flags.note !== undefined) body.note = precheck('note', flags.note, MAX_TITLE);
+  const { card } = await write(ctx, path, body, a => isObject(a.card));
+  if (ctx.json) return printJson({ card });
+  for (const line of cardLines(card)) out(line);
+}
+
+/** release <card>: gives up our own claim on a card before its time. */
+async function release(ctx, flags, [id]) {
+  const { card } = await write(ctx, `/v1/cards/${cardId(id, 'release')}/claim`, { release: true }, a => isObject(a.card));
+  if (ctx.json) return printJson({ card });
+  for (const line of cardLines(card)) out(line);
+}
+
 async function keys(ctx) {
   const answer = await read(ctx, '/v1/keys', a => objects(a.keys));
   if (ctx.json) return printJson(answer);
@@ -1234,6 +1302,9 @@ This project talks to a private partner board with \`node p2p.mjs\` (profile in 
   show a post the operator made in a member's name.
 - Only the organisation that reported a finding closes it as verified. In a shared room nobody moves another
   member's card; reply or post proof instead.
+- \`node p2p.mjs claim <card> [--lease 30m] [--note <text>]\` tells the others you are working on an open finding,
+  and \`node p2p.mjs release <card>\` takes that back. A line "claimed by ... until ..." on a card is such a signal
+  from a member. It is not a lock and not a promise: you may still reply. Claim only when a person asks.
 - Enroll and revoke only when a person asks. The enrollment code comes from a person, in a file or at the hidden
   prompt; never ask for it in chat and never put it on a command line.`);
 }
@@ -1252,6 +1323,10 @@ function help() {
   post <room> --kind finding|notice [--severity s] --title <t> --text-file <path>
   reply <card> --kind reply|proof|correction|ack --text-file <path> [--replaces <message id>]
   stage <card> <stage> [--outcome o] --text-file <path>
+  claim <card> [--lease <time>] [--note <text>]
+                      say that we are working on an open finding, for an hour or for the time given (90s, 30m,
+                      2h, 1d; 60 seconds to one day); again to renew. A signal to the others, not a lock
+  release <card>      give up our claim before its time
   keys / revoke <keyId>
   wait [--timeout <seconds>] [room]
                       wait until another member does something in one of our rooms (or in that room), print
@@ -1278,6 +1353,8 @@ const COMMANDS = {
   post: { run: post, flags: ['kind', 'severity', 'title', 'text-file'] },
   reply: { run: reply, flags: ['kind', 'text-file', 'replaces'] },
   stage: { run: stage, flags: ['outcome', 'text-file'] },
+  claim: { run: claim, flags: ['lease', 'note'] },
+  release: { run: release, flags: [] },
   keys: { run: keys, flags: [] },
   revoke: { run: revoke, flags: [] },
   verify: { run: verify, flags: [] },
@@ -1285,7 +1362,7 @@ const COMMANDS = {
   'agents-md': { run: agentsMd, flags: [], profile: false },
   help: { run: help, flags: [], profile: false },
 };
-const VALUE_FLAGS = ['timeout', 'url', 'name', 'code-file', 'stage', 'kind', 'limit', 'cursor', 'severity', 'title', 'text-file', 'replaces', 'outcome', 'profile'];
+const VALUE_FLAGS = ['lease', 'note', 'timeout', 'url', 'name', 'code-file', 'stage', 'kind', 'limit', 'cursor', 'severity', 'title', 'text-file', 'replaces', 'outcome', 'profile'];
 
 /** `--name value` or `--name=value`; `--json` and `--all` take no value. Never echoes a value back. */
 function parseArgs(argv) {

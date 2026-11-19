@@ -314,7 +314,9 @@ const CARD_FIELDS: [&str; 12] = ["created", "id", "kind", "mine", "outcome", "re
 
 fn card_fields_without_messages(card: &Value) -> Vec<String> {
     assert!(card["messages"].as_u64().is_some_and(|n| n >= 1), "{card}");
-    let mut names: Vec<String> = card.as_object().unwrap().keys().filter(|k| *k != "messages").cloned().collect();
+    // `claim` came after `messages`: it is on every card, and null on one nobody claimed.
+    assert!(card.get("claim").is_some_and(Value::is_null), "{card}");
+    let mut names: Vec<String> = card.as_object().unwrap().keys().filter(|k| *k != "messages" && *k != "claim").cloned().collect();
     names.sort();
     names
 }
@@ -341,7 +343,7 @@ async fn without_the_new_fields_every_answer_is_what_it_was() {
     assert_eq!(strip(w.get(&reseller, "/v1/rooms").await.1["rooms"].clone()), old_rooms);
     assert_eq!(strip(w.get(&reseller, "/v1/whoami").await.1["rooms"].clone()), old_rooms);
 
-    // A card minus `messages` has exactly the old fields, from every route that returns one.
+    // A card minus `messages` and `claim` has exactly the old fields, from every route that returns one.
     let (_, created) = w.post(&reseller, "/v1/rooms/a-x/cards", json!({ "kind": "finding", "severity": "wrong",
         "title": "Docs example uses a field name the API rejects", "text": "The example sends a field the API does not know." })).await;
     let id = created["card"]["id"].as_str().unwrap().to_owned();

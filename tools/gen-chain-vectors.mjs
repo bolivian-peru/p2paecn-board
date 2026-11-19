@@ -53,6 +53,20 @@ const rooms = [
       { kind: 'member-removed', card: null, actor: '*operator', time: 0, values: { name: 'member-3' } },
     ],
   },
+  {
+    room: 'b-y',
+    kind: 'pair',
+    note: 'A pair room with claims: a claim with a note, its renewal without one, a release, and a claim by the other side.',
+    events: [
+      { kind: 'member-added', card: null, actor: '*operator', time: 0, values: { name: 'supplier-b' } },
+      { kind: 'member-added', card: null, actor: '*operator', time: 0, values: { name: 'reseller-y' } },
+      { kind: 'card', card: card(4), actor: 'reseller-y', time: T, values: { kind: 'finding', severity: 'friction', title: 'Retry after a timeout sends the order twice', message: message(11), text: 'Seen once in a test run.' } },
+      { kind: 'claim', card: card(4), actor: 'supplier-b', time: T + 10, values: { until: T + 3610, note: 'Pr\u00fcfe ich bis heute Abend: \u{1F50D}' } },
+      { kind: 'claim', card: card(4), actor: 'supplier-b', time: T + 3000, values: { until: T + 10200, note: null } },
+      { kind: 'release', card: card(4), actor: 'supplier-b', time: T + 4000, values: {} },
+      { kind: 'claim', card: card(4), actor: 'reseller-y', time: T + 4100, values: { until: T + 4160, note: 'note:0:\nuntil:1:5' } },
+    ],
+  },
 ];
 
 const out = rooms.map(({ room, kind, note, events }) => {

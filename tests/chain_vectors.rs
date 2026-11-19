@@ -30,6 +30,8 @@ fn payload_bytes(kind: &str, values: &Value) -> Vec<u8> {
         "card" => Payload::Card { kind: &v("kind"), severity: &v("severity"), title: &v("title"), message: &v("message"), text: &v("text") }.bytes(),
         "message" => Payload::Message { id: &v("id"), kind: &v("kind"), replaces: &v("replaces"), text: &v("text") }.bytes(),
         "stage" => Payload::Stage { stage: &v("stage"), outcome: &v("outcome") }.bytes(),
+        "claim" => Payload::Claim { until: &v("until"), note: &v("note") }.bytes(),
+        "release" => Payload::Release.bytes(),
         "import" => Payload::Import { entries: &v("entries") }.bytes(),
         other => panic!("unknown kind {other}"),
     }
@@ -45,7 +47,7 @@ fn the_server_builds_the_same_bytes_and_hashes_as_the_client() {
     let v = vectors();
     assert_eq!((v["format"].as_str(), v["genesis"].as_str()), (Some(chain::FORMAT), Some(chain::GENESIS)));
     let rooms = v["rooms"].as_array().unwrap();
-    assert_eq!(rooms.len(), 2);
+    assert_eq!(rooms.len(), 3);
     let mut kinds = std::collections::BTreeSet::new();
     for room in rooms {
         let id = room["room"].as_str().unwrap();
@@ -73,7 +75,7 @@ fn the_server_builds_the_same_bytes_and_hashes_as_the_client() {
         assert_eq!(chain::check(id, &built), Ok(()));
     }
     let all: Vec<&str> = kinds.iter().map(String::as_str).collect();
-    assert_eq!(all, ["card", "import", "member-added", "member-removed", "message", "stage"], "every kind has a vector");
+    assert_eq!(all, ["card", "claim", "import", "member-added", "member-removed", "message", "release", "stage"], "every kind has a vector");
     assert!(rooms[0]["entries"].as_array().unwrap().len() >= 10, "a seq of two digits is covered");
 }
 
@@ -87,6 +89,9 @@ fn a_length_is_counted_in_bytes_and_a_value_cannot_pose_as_a_field() {
     let other = Payload::Message { id: "i", kind: "reply", replaces: "a", text: "b" }.bytes();
     assert_ne!(one, other);
     assert_ne!(Payload::MemberAdded { name: "member-1" }.hash(), Payload::MemberRemoved { name: "member-1" }.hash());
+    // A payload without fields is its header line alone.
+    assert_eq!(Payload::Release.bytes(), b"p2paecn-chain-1 payload release\n");
+    assert_ne!(Payload::Claim { until: "5", note: "" }.bytes(), Payload::Claim { until: "", note: "5" }.bytes());
 }
 
 #[test]
